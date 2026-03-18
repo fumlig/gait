@@ -1,0 +1,25 @@
+services:
+  chatterbox:
+    build: ./services/chatterbox
+    ports:
+      - "${CHATTERBOX_PORT:-8100}:8000"
+    volumes:
+      - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
+      - ${CHATTERBOX_VOICES_DIR:-./services/chatterbox/voices}:/app/voices
+    environment:
+      - DEVICE=${CHATTERBOX_DEVICE:-cuda}
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
