@@ -16,11 +16,21 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+KNOWN_MODELS = frozenset({"chatterbox-turbo"})
+
+# Aliases accepted for OpenAI drop-in compatibility.
+MODEL_ALIASES: dict[str, str] = {
+    "tts-1": "chatterbox-turbo",
+    "tts-1-hd": "chatterbox-turbo",
+}
+
+
 class ChatterboxEngine:
     """Wraps ChatterboxTurboTTS for use by the API layer."""
 
     def __init__(self) -> None:
         self._model = None
+        self._model_name: str | None = None
         self._sample_rate: int | None = None
 
     # ------------------------------------------------------------------
@@ -33,6 +43,7 @@ class ChatterboxEngine:
 
         logger.info("Loading Chatterbox-Turbo on device=%s ...", settings.device)
         self._model = ChatterboxTurboTTS.from_pretrained(device=settings.device)
+        self._model_name = "chatterbox-turbo"
         self._sample_rate = self._model.sr
         logger.info("Model loaded. Sample rate=%d", self._sample_rate)
 
@@ -41,19 +52,50 @@ class ChatterboxEngine:
         if self._model is not None:
             del self._model
             self._model = None
+            self._model_name = None
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
             logger.info("Model unloaded.")
+
+    def ensure_model(self, model_name: str) -> None:
+        """Validate and ensure the requested model is available.
+
+        Chatterbox currently only supports a single model, so this resolves
+        aliases and validates the name.  The pattern mirrors WhisperX's
+        ``ensure_model`` for consistency across services.
+        """
+        resolved = self._resolve_model_name(model_name)
+        if resolved not in KNOWN_MODELS:
+            raise ValueError(
+                f"Unknown model '{model_name}'. Available: {', '.join(sorted(KNOWN_MODELS))}"
+            )
+        # Only one model — if already loaded, nothing to do.
+        if self._model is not None:
+            return
+        self.load()
 
     @property
     def is_loaded(self) -> bool:
         return self._model is not None
 
     @property
+    def loaded_model_name(self) -> str | None:
+        return self._model_name
+
+    @property
     def sample_rate(self) -> int:
         if self._sample_rate is None:
             raise RuntimeError("Model not loaded")
         return self._sample_rate
+
+    # ------------------------------------------------------------------
+    # Model name resolution
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_model_name(name: str) -> str:
+        """Map OpenAI-compatible aliases to the canonical model name."""
+        return MODEL_ALIASES.get(name, name)
 
     # ------------------------------------------------------------------
     # Voice resolution

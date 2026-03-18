@@ -1,0 +1,81 @@
+[project]
+name = "whisperx-service"
+version = "0.1.0"
+description = "OpenAI-compatible speech-to-text API backed by WhisperX"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic-settings>=2.7",
+    "python-multipart>=0.0.9",
+    "whisperx>=3.8",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.11",
+    "pytest>=8",
+    "httpx>=0.28",
+    "pytest-asyncio>=0.25",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/whisperx_service"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 99
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "TCH",  # flake8-type-checking
+    "RUF",  # ruff-specific rules
+]
+ignore = [
+    "B008",  # function calls in defaults (FastAPI's File/Form/Depends pattern)
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["whisperx_service"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+# WhisperX requires PyTorch with CUDA -- use uv index overrides for the
+# correct wheel index.
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+    { index = "pytorch", marker = "sys_platform != 'darwin'" },
+]
+torchaudio = [
+    { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
+    { index = "pytorch", marker = "sys_platform != 'darwin'" },
+]
+triton = [
+    { index = "pytorch", marker = "sys_platform == 'linux'" },
+]
+
+[[tool.uv.index]]
+name = "pytorch"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true

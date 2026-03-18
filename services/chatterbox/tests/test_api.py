@@ -25,8 +25,10 @@ def mock_engine():
     with patch("chatterbox_service.engine.engine") as eng:
         eng.is_loaded = True
         eng.sample_rate = SAMPLE_RATE
+        eng.loaded_model_name = "chatterbox-turbo"
         eng.list_voices.return_value = ["default"]
         eng.generate.return_value = (DUMMY_WAV, SAMPLE_RATE)
+        eng.ensure_model.return_value = None
         # Also patch the engine used in routes (same singleton)
         with (
             patch("chatterbox_service.routes.speech.engine", eng),
@@ -127,7 +129,8 @@ async def test_speech_wav(client: AsyncClient, mock_engine: MagicMock):
     assert resp.content[:4] == b"RIFF"
 
 
-async def test_speech_unknown_model(client: AsyncClient):
+async def test_speech_unknown_model(client: AsyncClient, mock_engine: MagicMock):
+    mock_engine.ensure_model.side_effect = ValueError("Unknown model 'nonexistent'.")
     resp = await client.post(
         "/v1/audio/speech",
         json={

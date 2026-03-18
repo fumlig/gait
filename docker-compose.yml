@@ -1,4 +1,25 @@
 services:
+  gateway:
+    build: ./services/gateway
+    ports:
+      - "${GATEWAY_PORT:-8080}:8000"
+    environment:
+      - CHATTERBOX_URL=http://chatterbox:8000
+      - WHISPERX_URL=http://whisperx:8000
+      - PROXY_TIMEOUT=${PROXY_TIMEOUT:-300}
+    depends_on:
+      chatterbox:
+        condition: service_healthy
+      whisperx:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   chatterbox:
     build: ./services/chatterbox
     ports:
@@ -8,6 +29,34 @@ services:
       - ${CHATTERBOX_VOICES_DIR:-./services/chatterbox/voices}:/app/voices
     environment:
       - DEVICE=${CHATTERBOX_DEVICE:-cuda}
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+    restart: unless-stopped
+
+  whisperx:
+    build: ./services/whisperx
+    ports:
+      - "${WHISPERX_PORT:-8201}:8000"
+    volumes:
+      - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
+    environment:
+      - DEVICE=${WHISPERX_DEVICE:-cuda}
+      - DEFAULT_MODEL=${WHISPERX_DEFAULT_MODEL:-large-v3}
+      - COMPUTE_TYPE=${WHISPERX_COMPUTE_TYPE:-float16}
+      - BATCH_SIZE=${WHISPERX_BATCH_SIZE:-16}
+      - ENABLE_DIARIZATION=${WHISPERX_ENABLE_DIARIZATION:-false}
       - HF_TOKEN=${HF_TOKEN:-}
     deploy:
       resources:

@@ -19,15 +19,14 @@ router = APIRouter()
 @router.post("/v1/audio/speech")
 async def create_speech(req: SpeechRequest) -> StreamingResponse:
     """Generate speech audio from text input."""
+    # Validate and ensure model is loaded (dynamic swap pattern)
+    try:
+        engine.ensure_model(req.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
     if not engine.is_loaded:
         raise HTTPException(status_code=503, detail="Model is not loaded yet.")
-
-    # Validate model name
-    if req.model not in ("chatterbox-turbo", "tts-1", "tts-1-hd"):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown model '{req.model}'. Available: chatterbox-turbo",
-        )
 
     # Validate voice
     available_voices = engine.list_voices()
