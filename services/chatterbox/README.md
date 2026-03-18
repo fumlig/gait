@@ -121,13 +121,15 @@ All settings are configurable via environment variables (no prefix, case-insensi
 
 ## Development
 
+Requires Python 3.11 (pinned in `.python-version`; `uv` auto-downloads it if missing).
+
 ```bash
-uv sync --dev
-uv run ruff check src/
-uv run pytest
+uv sync --all-extras      # creates .venv with Python 3.11, installs all deps + dev tools
+uv run ruff check src/    # lint
+uv run pytest             # tests (mocked engine, no GPU needed)
 ```
 
-Tests use a mocked engine and do not require a GPU.
+For IDE support (e.g. VS Code / PyCharm), point the Python interpreter at `services/chatterbox/.venv/bin/python`.
 
 ## Build notes
 

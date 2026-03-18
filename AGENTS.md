@@ -120,3 +120,38 @@ Some ML packages pull in large unnecessary dependencies (e.g., `chatterbox-tts` 
 8. Write `README.md` with endpoints, config, and build notes.
 9. Update root `README.md` models table.
 10. Run `ruff check` and `pytest` before committing.
+
+## Local development
+
+Each service is an independent `uv` project (no workspace). Services can be developed and tested locally without Docker.
+
+### Python versions
+- Each service has a `.python-version` file that pins its required Python version.
+- `uv` reads this file automatically and downloads the correct interpreter if needed.
+- Current pins: chatterbox=3.11, whisperx=3.11, gateway=3.12, trave-common=3.11.
+- GPU services use Python 3.11 because ML libraries often depend on `distutils` (removed in 3.12) or pin `numpy<1.26`.
+
+### Setup
+From any service directory:
+```bash
+uv sync --all-extras   # creates .venv with the pinned Python, installs all deps + dev tools
+uv run ruff check src/ # lint
+uv run pytest          # tests (engines are mocked, no GPU needed)
+```
+
+### Shared library
+`libs/trave-common/` provides shared schemas (`ModelObject`, `ModelListResponse`, `HealthResponse`). Services reference it as an editable path dependency via `[tool.uv.sources]` in their `pyproject.toml`:
+```toml
+[tool.uv.sources]
+trave-common = { path = "../../libs/trave-common", editable = true }
+```
+
+### IDE configuration
+Each service has its own `.venv/`. Point your IDE's Python interpreter to the service you're working on:
+- VS Code: set `python.defaultInterpreterPath` in `.vscode/settings.json`, or use the Python interpreter picker per workspace folder.
+- PyCharm: configure each service directory as a separate module with its own interpreter.
+
+### Caveats
+- `.venv/` directories are gitignored. Always run `uv sync --all-extras` after cloning.
+- Do not use the system Python directly. The system may run a different version (e.g. 3.14) which will cause import or build failures.
+- If a `.venv` was created with the wrong Python version, delete it and re-run `uv sync --all-extras`.

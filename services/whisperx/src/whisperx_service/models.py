@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 from enum import StrEnum
-from typing import Literal
 
 from pydantic import BaseModel, Field
 from trave_common import HealthResponse, ModelListResponse, ModelObject
 
 # Re-export shared schemas for backward compatibility
 __all__ = [
+    "WHISPER_MODEL_SIZES",
     "HealthResponse",
     "ModelListResponse",
     "ModelObject",
@@ -18,7 +18,6 @@ __all__ = [
     "TimestampGranularity",
     "TranscriptionResponse",
     "VerboseTranscriptionResponse",
-    "WHISPER_MODEL_SIZES",
     "WordTimestamp",
 ]
 

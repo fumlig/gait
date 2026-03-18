@@ -48,13 +48,15 @@ Status is `"ok"` when all backends are healthy, `"degraded"` otherwise.
 
 ## Development
 
+Requires Python 3.12 (pinned in `.python-version`; `uv` auto-downloads it if missing).
+
 ```bash
-uv sync --dev
-uv run ruff check src/
-uv run pytest
+uv sync --all-extras      # creates .venv with Python 3.12, installs all deps + dev tools
+uv run ruff check src/    # lint
+uv run pytest             # tests (mocked httpx client, no backends needed)
 ```
 
-Tests mock the httpx client and do not require running backend services.
+For IDE support (e.g. VS Code / PyCharm), point the Python interpreter at `services/gateway/.venv/bin/python`.
 
 ## Architecture
 
