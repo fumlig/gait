@@ -8,7 +8,7 @@ import logging
 from fastapi import APIRouter
 
 from gateway_service.config import settings
-from gateway_service.models import HealthResponse
+from gateway_service.models import GatewayHealthResponse
 from gateway_service.proxy import get_client
 
 logger = logging.getLogger(__name__)
@@ -29,8 +29,8 @@ async def _check_backend(backend_url: str, backend_name: str) -> tuple[str, str]
         return backend_name, f"unreachable ({type(exc).__name__})"
 
 
-@router.get("/health", response_model=HealthResponse)
-async def health() -> HealthResponse:
+@router.get("/health", response_model=GatewayHealthResponse)
+async def health() -> GatewayHealthResponse:
     """Report gateway health and status of each backend."""
     backends = {
         settings.chatterbox_url: "chatterbox",
@@ -43,4 +43,4 @@ async def health() -> HealthResponse:
     backend_status = dict(results)
     overall = "ok" if all(v == "healthy" for v in backend_status.values()) else "degraded"
 
-    return HealthResponse(status=overall, backends=backend_status)
+    return GatewayHealthResponse(status=overall, backends=backend_status)

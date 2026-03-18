@@ -19,12 +19,13 @@ ENV HOST=0.0.0.0 \
     WHISPERX_URL=http://whisperx:8000 \
     PROXY_TIMEOUT=300
 
-# Copy project metadata first for layer caching
-COPY pyproject.toml ./
+# Copy shared library and project metadata first for layer caching
+COPY libs/trave-common/ /app/libs/trave-common/
+COPY services/gateway/pyproject.toml ./
 RUN uv sync --no-dev --no-install-project
 
 # Copy application source
-COPY src/ src/
+COPY services/gateway/src/ src/
 RUN uv sync --no-dev
 
 EXPOSE ${PORT}

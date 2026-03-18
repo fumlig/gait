@@ -7,6 +7,7 @@ dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "pydantic-settings>=2.7",
+    "trave-common",
     "python-multipart>=0.0.9",
     "whisperx>=3.8",
 ]
@@ -58,6 +59,7 @@ asyncio_mode = "auto"
 # WhisperX requires PyTorch with CUDA -- use uv index overrides for the
 # correct wheel index.
 [tool.uv.sources]
+trave-common = { path = "../../libs/trave-common", editable = true }
 torch = [
     { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
     { index = "pytorch", marker = "sys_platform != 'darwin'" },

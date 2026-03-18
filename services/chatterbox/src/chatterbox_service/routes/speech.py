@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from chatterbox_service.audio import encode_audio, stream_bytes
-from chatterbox_service.engine import engine
+from chatterbox_service.engine import engine, validate_language
 from chatterbox_service.models import CONTENT_TYPE_MAP, SpeechRequest
 
 logger = logging.getLogger(__name__)
@@ -21,12 +21,18 @@ async def create_speech(req: SpeechRequest) -> StreamingResponse:
     """Generate speech audio from text input."""
     # Validate and ensure model is loaded (dynamic swap pattern)
     try:
-        engine.ensure_model(req.model)
+        model_name = engine.ensure_model(req.model)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    # Validate language for multilingual models
+    try:
+        validate_language(model_name, req.language)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     if not engine.is_loaded:
-        raise HTTPException(status_code=503, detail="Model is not loaded yet.")
+        raise HTTPException(status_code=503, detail="No model is loaded yet.")
 
     # Validate voice
     available_voices = engine.list_voices()
@@ -38,7 +44,21 @@ async def create_speech(req: SpeechRequest) -> StreamingResponse:
 
     # Generate
     try:
-        wav, sr = engine.generate(text=req.input, voice=req.voice, speed=req.speed)
+        wav, sr = engine.generate(
+            text=req.input,
+            model_name=model_name,
+            voice=req.voice,
+            speed=req.speed,
+            language=req.language,
+            exaggeration=req.exaggeration,
+            cfg_weight=req.cfg_weight,
+            temperature=req.temperature,
+            repetition_penalty=req.repetition_penalty,
+            top_p=req.top_p,
+            min_p=req.min_p,
+            top_k=req.top_k,
+            seed=req.seed,
+        )
     except Exception as exc:
         logger.exception("Speech generation failed")
         raise HTTPException(status_code=500, detail="Speech generation failed.") from exc

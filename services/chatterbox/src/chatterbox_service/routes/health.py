@@ -12,4 +12,8 @@ router = APIRouter()
 
 @router.get("/health", response_model=HealthResponse)
 async def health() -> HealthResponse:
-    return HealthResponse(status="ok", model_loaded=engine.is_loaded)
+    return HealthResponse(
+        status="ok",
+        model_loaded=engine.is_loaded,
+        models=engine.loaded_models,
+    )

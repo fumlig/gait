@@ -2,24 +2,22 @@
 
 from __future__ import annotations
 
-from typing import Literal
-
 from pydantic import BaseModel
+from trave_common import HealthResponse, ModelListResponse, ModelObject
+
+# Re-export shared schemas for backward compatibility
+__all__ = [
+    "BackendHealth",
+    "GatewayHealthResponse",
+    "HealthResponse",
+    "ModelListResponse",
+    "ModelObject",
+]
 
 
-class ModelObject(BaseModel):
-    id: str
-    object: Literal["model"] = "model"
-    created: int = 0
-    owned_by: str = ""
+class GatewayHealthResponse(BaseModel):
+    """Gateway-specific health response with backend status."""
 
-
-class ModelListResponse(BaseModel):
-    object: Literal["list"] = "list"
-    data: list[ModelObject]
-
-
-class HealthResponse(BaseModel):
     status: str = "ok"
     backends: dict[str, str] = {}
 

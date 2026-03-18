@@ -33,12 +33,13 @@ ENV HOST=0.0.0.0 \
     BATCH_SIZE=16 \
     ENABLE_DIARIZATION=false
 
-# Copy project metadata first for layer caching
-COPY pyproject.toml ./
+# Copy shared library and project metadata first for layer caching
+COPY libs/trave-common/ /app/libs/trave-common/
+COPY services/whisperx/pyproject.toml ./
 RUN uv sync --no-dev --no-install-project
 
 # Copy application source
-COPY src/ src/
+COPY services/whisperx/src/ src/
 RUN uv sync --no-dev
 
 EXPOSE ${PORT}

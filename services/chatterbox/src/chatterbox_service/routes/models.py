@@ -10,6 +10,8 @@ router = APIRouter()
 
 AVAILABLE_MODELS = [
     ModelObject(id="chatterbox-turbo", owned_by="resemble-ai"),
+    ModelObject(id="chatterbox", owned_by="resemble-ai"),
+    ModelObject(id="chatterbox-multilingual", owned_by="resemble-ai"),
 ]
 
 

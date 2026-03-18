@@ -367,6 +367,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pydub" },
     { name = "setuptools" },
+    { name = "trave-common" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -390,6 +391,7 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.25" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.11" },
     { name = "setuptools", specifier = "<81" },
+    { name = "trave-common", editable = "../../libs/trave-common" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]
 provides-extras = ["dev"]
@@ -2494,6 +2496,17 @@ sdist = { url = "https://files.pythonhosted.org/packages/37/5a/58f96c83e566f907a
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/51/b87caa939fedf307496e4dbf412f4b909af3d9ca8b189fc3b65c1faa456f/transformers-4.46.3-py3-none-any.whl", hash = "sha256:a12ef6f52841fd190a3e5602145b542d03507222f2c64ebb7ee92e8788093aef", size = 10034536, upload-time = "2024-11-18T22:12:57.024Z" },
 ]
+
+[[package]]
+name = "trave-common"
+version = "0.1.0"
+source = { editable = "../../libs/trave-common" }
+dependencies = [
+    { name = "pydantic" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "pydantic", specifier = ">=2.0" }]
 
 [[package]]
 name = "triton"

@@ -8,9 +8,13 @@ Each model runs in its own Docker container with GPU passthrough, isolated depen
 
 | Service | Model | Params | Type | Port | Docs |
 |---------|-------|--------|------|------|------|
-| [chatterbox](services/chatterbox/) | [Chatterbox-Turbo](https://github.com/resemble-ai/chatterbox) | 350M | TTS | 8100 | [README](services/chatterbox/README.md) |
+| [chatterbox](services/chatterbox/) | [Chatterbox-Turbo](https://github.com/resemble-ai/chatterbox) | 350M | TTS (English) | 8100 | [README](services/chatterbox/README.md) |
+| [chatterbox](services/chatterbox/) | [Chatterbox](https://github.com/resemble-ai/chatterbox) | 500M | TTS (English) | 8100 | [README](services/chatterbox/README.md) |
+| [chatterbox](services/chatterbox/) | [Chatterbox-Multilingual](https://github.com/resemble-ai/chatterbox) | 500M | TTS (23 languages) | 8100 | [README](services/chatterbox/README.md) |
 | [whisperx](services/whisperx/) | [WhisperX](https://github.com/m-bain/whisperX) (large-v3 default) | 1.5B | STT | 8201 | [README](services/whisperx/README.md) |
 | [gateway](services/gateway/) | -- | -- | API Gateway | 8080 | [README](services/gateway/README.md) |
+
+All three Chatterbox models run in a single container. The default model (`chatterbox-turbo`) is preloaded at startup; others load on demand.
 
 ## Quick start
 
@@ -80,6 +84,7 @@ Global settings via environment variables or a `.env` file in the repo root:
 | `HF_HOME` | `~/.cache/huggingface` | Host path for model weight cache |
 | `GATEWAY_PORT` | `8080` | Host port for the API gateway |
 | `CHATTERBOX_PORT` | `8100` | Host port for the chatterbox service |
+| `CHATTERBOX_DEFAULT_MODEL` | `chatterbox-turbo` | Model to preload at startup |
 | `WHISPERX_PORT` | `8201` | Host port for the whisperx service |
 | `PROXY_TIMEOUT` | `300` | Gateway proxy timeout in seconds |
 
@@ -90,6 +95,8 @@ Per-service configuration is documented in each service's README.
 ```
 trave/
   docker-compose.yml
+  libs/
+    trave-common/      # shared schemas (ModelObject, HealthResponse, etc.)
   services/
     gateway/           # FastAPI API gateway (reverse proxy)
       Dockerfile
@@ -97,7 +104,7 @@ trave/
       README.md
       src/
       tests/
-    chatterbox/        # Chatterbox-Turbo TTS
+    chatterbox/        # Chatterbox TTS (Turbo, Original, Multilingual)
       Dockerfile
       pyproject.toml
       README.md

@@ -6,6 +6,21 @@ from enum import StrEnum
 from typing import Literal
 
 from pydantic import BaseModel, Field
+from trave_common import HealthResponse, ModelListResponse, ModelObject
+
+# Re-export shared schemas for backward compatibility
+__all__ = [
+    "HealthResponse",
+    "ModelListResponse",
+    "ModelObject",
+    "ResponseFormat",
+    "Segment",
+    "TimestampGranularity",
+    "TranscriptionResponse",
+    "VerboseTranscriptionResponse",
+    "WHISPER_MODEL_SIZES",
+    "WordTimestamp",
+]
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -91,25 +106,3 @@ class VerboseTranscriptionResponse(BaseModel):
     text: str = ""
     words: list[WordTimestamp] = Field(default_factory=list)
     segments: list[Segment] = Field(default_factory=list)
-
-
-# ---------------------------------------------------------------------------
-# Model listing (OpenAI-compatible)
-# ---------------------------------------------------------------------------
-
-
-class ModelObject(BaseModel):
-    id: str
-    object: Literal["model"] = "model"
-    created: int = 0
-    owned_by: str = "whisperx"
-
-
-class ModelListResponse(BaseModel):
-    object: Literal["list"] = "list"
-    data: list[ModelObject]
-
-
-class HealthResponse(BaseModel):
-    status: str = "ok"
-    model_loaded: bool = False

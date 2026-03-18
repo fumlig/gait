@@ -1,6 +1,8 @@
 services:
   gateway:
-    build: ./services/gateway
+    build:
+      context: .
+      dockerfile: services/gateway/Dockerfile
     ports:
       - "${GATEWAY_PORT:-8080}:8000"
     environment:
@@ -21,7 +23,9 @@ services:
     restart: unless-stopped
 
   chatterbox:
-    build: ./services/chatterbox
+    build:
+      context: .
+      dockerfile: services/chatterbox/Dockerfile
     ports:
       - "${CHATTERBOX_PORT:-8100}:8000"
     volumes:
@@ -29,6 +33,7 @@ services:
       - ${CHATTERBOX_VOICES_DIR:-./services/chatterbox/voices}:/app/voices
     environment:
       - DEVICE=${CHATTERBOX_DEVICE:-cuda}
+      - DEFAULT_MODEL=${CHATTERBOX_DEFAULT_MODEL:-chatterbox-turbo}
       - HF_TOKEN=${HF_TOKEN:-}
     deploy:
       resources:
@@ -46,7 +51,9 @@ services:
     restart: unless-stopped
 
   whisperx:
-    build: ./services/whisperx
+    build:
+      context: .
+      dockerfile: services/whisperx/Dockerfile
     ports:
       - "${WHISPERX_PORT:-8201}:8000"
     volumes:

@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
+    # Which model to preload at startup (others loaded on demand)
+    default_model: str = "chatterbox-turbo"
+
     # Directory containing named voice reference .wav files
     voices_dir: Path = Path("/app/voices")
 
