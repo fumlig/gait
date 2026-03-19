@@ -11,13 +11,15 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from gateway_service.clients.chat import ChatClient
 from gateway_service.clients.speech import SpeechClient
 from gateway_service.clients.transcription import TranscriptionClient
 from gateway_service.clients.voice import VoiceClient
 from gateway_service.config import settings
 from gateway_service.models import ModelObject
-from gateway_service.routes import health, models
+from gateway_service.routes import completions, embeddings, health, models, responses
 from gateway_service.routes.audio import router as audio_router
+from gateway_service.routes.chat import router as chat_router
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -61,21 +63,32 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     # Create typed clients
     speech_client = SpeechClient(base_url=settings.speech_url, client=client)
     transcription_client = TranscriptionClient(base_url=settings.transcription_url, client=client)
-    voice_client = VoiceClient(base_url=settings.voice_url, client=client)
+    voice_client = VoiceClient(voices_dir=settings.voices_dir)
 
-    # Discover models from speech and transcription backends (concurrently)
-    speech_models, transcription_models = await asyncio.gather(
+    chat_client: ChatClient | None = None
+    if settings.chat_url:
+        chat_client = ChatClient(base_url=settings.chat_url, client=client)
+
+    # Discover models from all backends (concurrently)
+    model_futures = [
         _fetch_models(client, "speech", f"{settings.speech_url.rstrip('/')}/models"),
         _fetch_models(client, "transcription", f"{settings.transcription_url.rstrip('/')}/models"),
-    )
+    ]
+    if chat_client:
+        model_futures.append(
+            _fetch_models(client, "chat", f"{settings.chat_url.rstrip('/')}/v1/models"),
+        )
+
+    all_model_lists = await asyncio.gather(*model_futures)
 
     # Merge and deduplicate
     seen: set[str] = set()
     merged: list[ModelObject] = []
-    for model in [*speech_models, *transcription_models]:
-        if model.id not in seen:
-            seen.add(model.id)
-            merged.append(model)
+    for model_list in all_model_lists:
+        for model in model_list:
+            if model.id not in seen:
+                seen.add(model.id)
+                merged.append(model)
 
     logger.info("Model discovery complete — %d model(s)", len(merged))
 
@@ -83,14 +96,16 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     application.state.speech_client = speech_client
     application.state.transcription_client = transcription_client
     application.state.voice_client = voice_client
+    application.state.chat_client = chat_client
     application.state.models = merged
 
-    logger.info(
-        "Gateway started — backends: speech=%s, transcription=%s, voice=%s",
-        settings.speech_url,
-        settings.transcription_url,
-        settings.voice_url,
+    backends_msg = (
+        f"speech={settings.speech_url}, transcription={settings.transcription_url}, "
+        f"voices_dir={settings.voices_dir}"
     )
+    if settings.chat_url:
+        backends_msg += f", chat={settings.chat_url}"
+    logger.info("Gateway started — backends: %s", backends_msg)
     yield
 
     await client.aclose()
@@ -113,6 +128,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+app.include_router(chat_router)
+app.include_router(completions.router)
+app.include_router(responses.router)
+app.include_router(embeddings.router)
 app.include_router(audio_router)
 app.include_router(models.router)
 app.include_router(health.router)

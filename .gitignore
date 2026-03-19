@@ -33,3 +33,9 @@ docker-compose.override.yml
 
 # HuggingFace cache (should never be committed)
 .cache/
+
+# Model weights and voice clips (directories kept via .gitkeep / test files)
+models/*
+!models/.gitkeep
+voices/*
+!voices/.gitkeep

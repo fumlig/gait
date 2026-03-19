@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic_settings import BaseSettings
 
 
@@ -20,7 +22,10 @@ class Settings(BaseSettings):
     # Backend service URLs (internal Docker network addresses)
     speech_url: str = "http://chatterbox:8000"
     transcription_url: str = "http://whisperx:8000"
-    voice_url: str = "http://voice:8000"
+    chat_url: str = ""  # empty = chat backend disabled (e.g. http://llamacpp:8000)
+
+    # Voice management (local filesystem, shared volume with chatterbox)
+    voices_dir: Path = Path("/app/voices")
 
     # Timeouts for backend requests (seconds)
     backend_timeout: float = 300.0  # ML inference can be slow

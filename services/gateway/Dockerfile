@@ -17,7 +17,8 @@ ENV HOST=0.0.0.0 \
     PORT=8000 \
     SPEECH_URL=http://chatterbox:8000 \
     TRANSCRIPTION_URL=http://whisperx:8000 \
-    VOICE_URL=http://voice:8000 \
+    CHAT_URL= \
+    VOICES_DIR=/app/voices \
     BACKEND_TIMEOUT=300
 
 # Copy project metadata first for layer caching

@@ -5,17 +5,18 @@ services:
       dockerfile: services/gateway/Dockerfile
     ports:
       - "${GATEWAY_PORT:-8080}:8000"
+    volumes:
+      - ${VOICES_DIR:-./voices}:/app/voices
     environment:
       - SPEECH_URL=http://chatterbox:8000
       - TRANSCRIPTION_URL=http://whisperx:8000
-      - VOICE_URL=http://voice:8000
+      - CHAT_URL=${CHAT_URL:-http://llamacpp:8000}
+      - VOICES_DIR=/app/voices
       - BACKEND_TIMEOUT=${BACKEND_TIMEOUT:-300}
     depends_on:
       chatterbox:
         condition: service_healthy
       whisperx:
-        condition: service_healthy
-      voice:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
@@ -29,8 +30,6 @@ services:
     build:
       context: .
       dockerfile: services/chatterbox/Dockerfile
-    ports:
-      - "${CHATTERBOX_PORT:-8100}:8000"
     volumes:
       - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
       - ${VOICES_DIR:-./voices}:/app/voices
@@ -57,8 +56,6 @@ services:
     build:
       context: .
       dockerfile: services/whisperx/Dockerfile
-    ports:
-      - "${WHISPERX_PORT:-8201}:8000"
     volumes:
       - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
     environment:
@@ -83,18 +80,34 @@ services:
       start_period: 120s
     restart: unless-stopped
 
-  voice:
+  llamacpp:
     build:
       context: .
-      dockerfile: services/voice/Dockerfile
-    ports:
-      - "${VOICE_PORT:-8300}:8000"
+      dockerfile: services/llamacpp/Dockerfile
+      args:
+        - LLAMA_SERVER_TAG=${LLAMA_SERVER_TAG:-server-cuda}
     volumes:
-      - ${VOICES_DIR:-./voices}:/app/voices
+      - ${MODELS_DIR:-${LLAMA_CACHE:-./models}}:/root/.cache/llama.cpp
+    environment:
+      - LLAMA_ARG_MODEL=${LLAMA_MODEL:-}
+      - LLAMA_ARG_HF_REPO=${LLAMA_HF_REPO:-unsloth/Qwen3.5-9B-GGUF:Q8_0}
+      - LLAMA_ARG_HOST=0.0.0.0
+      - LLAMA_ARG_PORT=8000
+      - LLAMA_ARG_CTX_SIZE=${LLAMA_CTX_SIZE:-4096}
+      - LLAMA_ARG_N_GPU_LAYERS=${LLAMA_N_GPU_LAYERS:-99}
+      - LLAMA_ARG_EMBEDDINGS=1
+      - HF_TOKEN=${HF_TOKEN:-}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 5
-      start_period: 5s
+      start_period: 60s
     restart: unless-stopped

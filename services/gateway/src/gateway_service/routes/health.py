@@ -18,15 +18,15 @@ async def health(request: Request) -> GatewayHealthResponse:
     """Report gateway health and status of each backend."""
     speech_client = getattr(request.app.state, "speech_client", None)
     transcription_client = getattr(request.app.state, "transcription_client", None)
-    voice_client = getattr(request.app.state, "voice_client", None)
+    chat_client = getattr(request.app.state, "chat_client", None)
 
     backend_status: dict[str, str] = {}
 
-    # Check each backend's health (gracefully handle missing clients)
+    # Check each remote backend's health (gracefully handle missing clients)
     for name, client in [
         ("speech", speech_client),
         ("transcription", transcription_client),
-        ("voice", voice_client),
+        ("chat", chat_client),
     ]:
         if client is None:
             backend_status[name] = "not_configured"

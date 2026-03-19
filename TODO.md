@@ -17,3 +17,5 @@
 
 - Make model services even slimmer - almost just RPC/remote stubs that the backend protocols in the gateways call. Can we use some simple RPC scheme here?
 - Turn the voice backend into its own service (that is just a file store). Provide access to the same volume to the chatterbox service.
+- Add `ty` for typechecking
+- Implement language model (Qwen3.5)

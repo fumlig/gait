@@ -9,28 +9,30 @@ Trave exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway
 ## Architecture
 
 ```
-                   ┌───────────────────┐
-                   │     Gateway       │  FastAPI, OpenAI-compatible API
-                   │   (port 8080)     │  Format conversion, model list cache
+                   ┌────────────────────┐
+                   │      Gateway       │  FastAPI, OpenAI-compatible API
+                   │    (port 8080)     │  Format conversion, model list cache
+                   │                    │  Voice management (local filesystem)
                    └──┬──────┬──────┬──┘
                       │      │      │
-           ┌──────────┘      │      └──────────┐
-           ▼                 ▼                  ▼
-   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐
-   │  Chatterbox  │  │   WhisperX   │  │    Voice     │
-   │  Starlette   │  │  Starlette   │  │  Starlette   │
-   │  GPU / CUDA  │  │  GPU / CUDA  │  │  No GPU      │
-   │  /synthesize │  │  /transcribe │  │  /voices     │
-   │  /models     │  │  /translate  │  │  /health     │
-   │  /health     │  │  /models     │  │              │
-   └──────────────┘  │  /health     │  └──────────────┘
-                     └──────────────┘
+           ┌──────────┘      │      └──────────────┐
+           ▼                 ▼                      ▼
+   ┌──────────────┐  ┌────────────┐  ┌──────────────┐
+   │  llama.cpp   │  │ Chatterbox │  │   WhisperX   │
+   │  (upstream)  │  │ Starlette  │  │  Starlette   │
+   │  GPU / CUDA  │  │ GPU / CUDA │  │  GPU / CUDA  │
+   │  /v1/chat/.. │  │ /synthesize│  │  /transcribe │
+   │  /v1/complet.│  │ /models    │  │  /translate  │
+   │  /v1/embeddi.│  │ /health    │  │  /models     │
+   │  /v1/models  │  │            │  │  /health     │
+   │  /health     │  └────────────┘  └──────────────┘
+   └──────────────┘
 ```
 
-- **Gateway** owns the OpenAI API contract: request/response schemas, format conversion (WAV→MP3, segments→SRT/VTT), model list caching.
+- **Gateway** owns the OpenAI API contract: request/response schemas, format conversion (WAV→MP3, segments→SRT/VTT), model list caching. Also handles voice management directly on a local directory (shared volume with chatterbox).
+- **llamacpp** runs the upstream llama.cpp server image directly. Already OpenAI-compatible — the gateway proxies requests transparently. No custom application code.
 - **Backends** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no trave-common.
-- **Voice service** manages WAV reference clips on a shared volume. No GPU, no ML dependencies.
-- **Clients** live in the gateway's `clients/` module. Each client is a typed HTTP wrapper for one backend.
+- **Clients** live in the gateway's `clients/` module. HTTP clients wrap remote backends (speech, transcription, chat). The voice client operates on the local filesystem instead of making HTTP calls.
 
 ## Repository structure
 
@@ -47,12 +49,18 @@ trave/
         models.py              # shared response schemas
         formatting.py          # response format conversion
         clients/
+          chat.py              # transparent proxy client for llama.cpp
           speech.py            # typed HTTP client for chatterbox
           transcription.py     # typed HTTP client for whisperx
-          voice.py             # typed HTTP client for voice service
+          voice.py             # local filesystem client for voice management
         routes/
           health.py            # GET /health
           models.py            # GET /v1/models
+          completions.py     # POST /v1/completions
+          responses.py       # POST /v1/responses
+          embeddings.py      # POST /v1/embeddings
+          chat/
+            completions.py   # POST /v1/chat/completions
           audio/
             speech.py          # POST /v1/audio/speech
             transcriptions.py  # POST /v1/audio/transcriptions
@@ -60,6 +68,9 @@ trave/
             voices.py          # voice management (proxied to voice service)
       tests/
         test_api.py            # pytest + httpx, mocked clients
+    llamacpp/                  # LLM backend (upstream llama.cpp image)
+      Dockerfile               # thin wrapper around ghcr.io/ggml-org/llama.cpp
+      README.md                # service docs
     chatterbox/                # TTS backend (Starlette)
       src/chatterbox_service/
         app.py                 # Starlette app (RPC endpoints)
@@ -74,12 +85,7 @@ trave/
         engine.py              # model loading + inference singleton
       tests/
         test_api.py            # pytest + httpx, mocked engine
-    voice/                     # Voice management (Starlette, no GPU)
-      src/voice_service/
-        app.py                 # Starlette app (CRUD endpoints)
-        config.py              # pydantic-settings
-      tests/
-        test_api.py            # pytest + httpx
+
 ```
 
 ## Conventions
@@ -101,14 +107,15 @@ trave/
 - FastAPI app. Owns all OpenAI API contract concerns.
 - `clients/` module contains typed HTTP wrappers, one per backend.
 - Clients are stored on `app.state` (e.g. `request.app.state.speech_client`). No registry, no dynamic discovery.
-- Backend URLs are static env vars: `SPEECH_URL`, `TRANSCRIPTION_URL`, `VOICE_URL`.
+- Backend URLs are static env vars: `SPEECH_URL`, `TRANSCRIPTION_URL`, `CHAT_URL`. Voice management uses a local `VOICES_DIR` path.
+- Route modules mirror OpenAI API resource grouping: `chat/`, `completions`, `responses`, `embeddings`, `audio/`.
 - Models are fetched from backends once at startup and cached on `app.state.models`.
 - Format conversion (WAV→MP3, segments→SRT/VTT) happens in the gateway.
 
-### Voice service
-- Starlette app. Manages WAV reference clips on a shared volume.
-- No GPU, no ML dependencies. Lightweight Python 3.12 base image.
-- Shares `VOICES_DIR` volume with chatterbox for voice resolution.
+### Voice management
+- Voice CRUD is handled inside the gateway via a local filesystem client (`clients/voice.py`).
+- The `VOICES_DIR` directory is shared with chatterbox via a Docker volume for voice resolution.
+- No separate service or container — the gateway reads/writes WAV files directly.
 
 ### API design
 - The gateway matches the OpenAI API contract for the relevant modality (TTS, STT).
@@ -119,7 +126,7 @@ trave/
 
 ### Docker
 - Base image: `nvidia/cuda:<version>-runtime-ubuntu<version>` for GPU services.
-- Base image: `python:3.12-slim` for non-GPU services (voice).
+- Base image: `python:3.12-slim` for non-GPU services (gateway).
 - Use `ARG` for build-time configurability (Python version, CUDA version).
 - Use `ENV` with defaults for runtime configurability (port, host, device).
 - The `CMD` should reference env vars so they can be overridden at runtime.
@@ -127,12 +134,13 @@ trave/
 - Include `curl` in the image for healthcheck.
 
 ### docker-compose.yml
-- Every port, volume path, and env var should be configurable via `${VAR:-default}` syntax.
-- Mount `HF_HOME` from host for model weight caching.
+- Only the gateway exposes a host port (`GATEWAY_PORT`). Backend services communicate over the internal Docker network.
+- Every volume path and env var should be configurable via `${VAR:-default}` syntax.
+- Mount `HF_HOME` from host for audio model weight caching; `MODELS_DIR` (or `LLAMA_CACHE`) for LLM weights.
 - Pass `HF_TOKEN` for gated model access.
 - Use `deploy.resources.reservations.devices` for GPU passthrough (GPU services only).
 - Set `restart: unless-stopped` and a healthcheck with generous `start_period` (models take time to load).
-- Shared `VOICES_DIR` volume between chatterbox and voice service.
+- Shared `VOICES_DIR` volume between gateway and chatterbox.
 
 ### Configuration (config.py)
 - Use `pydantic-settings` with `BaseSettings`.
@@ -206,7 +214,7 @@ Each service is an independent `uv` project (no workspace). Services can be deve
 ### Python versions
 - Each service has a `.python-version` file that pins its required Python version.
 - `uv` reads this file automatically and downloads the correct interpreter if needed.
-- Current pins: chatterbox=3.11, whisperx=3.11, gateway=3.12, voice=3.12.
+- Current pins: chatterbox=3.11, whisperx=3.11, gateway=3.12.
 - GPU services use Python 3.11 because ML libraries often depend on `distutils` (removed in 3.12) or pin `numpy<1.26`.
 
 ### Setup

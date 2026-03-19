@@ -1,6 +1,7 @@
 """Tests for the API gateway.
 
-These tests mock the client instances to avoid needing real backend services.
+These tests mock the HTTP client instances to avoid needing real backend services.
+The voice client is tested with real filesystem operations (tmp_path).
 Clients are attached directly to ``app.state``.
 """
 
@@ -13,11 +14,11 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+from gateway_service.clients.voice import VoiceClient
 from gateway_service.models import (
     ModelObject,
     RawSegment,
     TranscriptionResult,
-    Voice,
     WordTimestamp,
 )
 
@@ -39,7 +40,11 @@ WHISPERX_MODELS = [
     ModelObject(id="large-v3", owned_by="whisperx"),
 ]
 
-ALL_MODELS = CHATTERBOX_MODELS + WHISPERX_MODELS
+LLAMACPP_MODELS = [
+    ModelObject(id="my-model", owned_by="llamacpp"),
+]
+
+ALL_MODELS = CHATTERBOX_MODELS + WHISPERX_MODELS + LLAMACPP_MODELS
 
 # Minimal valid WAV (44-byte header + 2 bytes of silence)
 _WAV_HEADER = (
@@ -136,22 +141,97 @@ def _make_transcription_client(
     return client
 
 
-def _make_voice_client(
+MOCK_CHAT_COMPLETION = {
+    "id": "chatcmpl-123",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "my-model",
+    "choices": [
+        {
+            "index": 0,
+            "message": {"role": "assistant", "content": "Hello! How can I help you?"},
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+}
+
+MOCK_COMPLETION = {
+    "id": "cmpl-123",
+    "object": "text_completion",
+    "created": 1700000000,
+    "model": "my-model",
+    "choices": [
+        {
+            "index": 0,
+            "text": "Hello world",
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+}
+
+MOCK_RESPONSE = {
+    "id": "resp-123",
+    "object": "response",
+    "created_at": 1700000000,
+    "model": "my-model",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg-123",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "Hello! How can I help?"}],
+        }
+    ],
+    "status": "completed",
+    "usage": {"input_tokens": 10, "output_tokens": 8, "total_tokens": 18},
+}
+
+MOCK_EMBEDDINGS = {
+    "object": "list",
+    "data": [
+        {
+            "object": "embedding",
+            "index": 0,
+            "embedding": [0.1, 0.2, 0.3],
+        }
+    ],
+    "model": "my-model",
+    "usage": {"prompt_tokens": 5, "total_tokens": 5},
+}
+
+
+def _make_chat_client(
     *,
-    voices: list[Voice] | None = None,
+    forward_result: dict | None = None,
+    forward_error: Exception | None = None,
+    stream_result: AsyncMock | None = None,
+    stream_error: Exception | None = None,
 ) -> AsyncMock:
-    """Create a mock VoiceClient."""
+    """Create a mock ChatClient."""
     client = AsyncMock()
     client.health.return_value = {"status": "healthy"}
+    client.list_models.return_value = LLAMACPP_MODELS
+    if forward_error:
+        client.forward.side_effect = forward_error
+    else:
+        client.forward.return_value = forward_result or MOCK_CHAT_COMPLETION
+    if stream_error:
+        client.forward_stream.side_effect = stream_error
+    elif stream_result:
+        client.forward_stream.return_value = stream_result
+    else:
+        # Default: return a mock StreamingResponse
+        from starlette.responses import StreamingResponse
 
-    default_voices = voices or [
-        Voice(voice_id="default", name="default"),
-        Voice(voice_id="narrator", name="narrator"),
-    ]
-    client.list_voices.return_value = default_voices
-    client.get_voice.return_value = default_voices[0]
-    client.create_voice.return_value = Voice(voice_id="newvoice", name="newvoice")
-    client.delete_voice.return_value = {"deleted": True, "voice_id": "default"}
+        async def _mock_stream():
+            yield b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+            yield b"data: [DONE]\n\n"
+
+        client.forward_stream.return_value = StreamingResponse(
+            _mock_stream(), media_type="text/event-stream"
+        )
     return client
 
 
@@ -171,23 +251,33 @@ def transcription_client():
 
 
 @pytest.fixture()
-def voice_client():
-    return _make_voice_client()
+def voice_client(tmp_path):
+    return VoiceClient(voices_dir=tmp_path)
 
 
 @pytest.fixture()
-def app(speech_client, transcription_client, voice_client):
+def chat_client():
+    return _make_chat_client()
+
+
+@pytest.fixture()
+def app(speech_client, transcription_client, voice_client, chat_client):
     """Create a test app with mock clients attached to state."""
     from fastapi import FastAPI
 
-    from gateway_service.routes import health, models
+    from gateway_service.routes import completions, embeddings, health, models, responses
     from gateway_service.routes.audio import router as audio_router
+    from gateway_service.routes.chat import router as chat_router
 
     @asynccontextmanager
     async def noop_lifespan(_: FastAPI) -> AsyncIterator[None]:
         yield
 
     test_app = FastAPI(lifespan=noop_lifespan)
+    test_app.include_router(chat_router)
+    test_app.include_router(completions.router)
+    test_app.include_router(responses.router)
+    test_app.include_router(embeddings.router)
     test_app.include_router(audio_router)
     test_app.include_router(models.router)
     test_app.include_router(health.router)
@@ -195,6 +285,7 @@ def app(speech_client, transcription_client, voice_client):
     test_app.state.speech_client = speech_client
     test_app.state.transcription_client = transcription_client
     test_app.state.voice_client = voice_client
+    test_app.state.chat_client = chat_client
     test_app.state.models = ALL_MODELS
 
     return test_app
@@ -220,7 +311,9 @@ async def test_health_all_healthy(client: AsyncClient):
     assert data["status"] == "ok"
     assert data["backends"]["speech"] == "healthy"
     assert data["backends"]["transcription"] == "healthy"
-    assert data["backends"]["voice"] == "healthy"
+    assert data["backends"]["chat"] == "healthy"
+    # Voice is local — not listed as a remote backend
+    assert "voice" not in data["backends"]
 
 
 async def test_health_backend_down(client: AsyncClient, speech_client: AsyncMock):
@@ -248,6 +341,7 @@ async def test_list_models_merged(client: AsyncClient):
     assert "chatterbox-turbo" in model_ids
     assert "whisper-1" in model_ids
     assert "large-v3" in model_ids
+    assert "my-model" in model_ids
 
 
 async def test_list_models_empty_when_no_models():
@@ -502,43 +596,47 @@ async def test_translation_invalid_format(client: AsyncClient):
 
 
 # ---------------------------------------------------------------------------
-# Audio: Voices
+# Audio: Voices (local filesystem via VoiceClient)
 # ---------------------------------------------------------------------------
 
 
-async def test_list_voices(client: AsyncClient, voice_client: AsyncMock):
-    """GET /v1/audio/voices returns a wrapped list."""
+async def test_list_voices_empty(client: AsyncClient):
+    """GET /v1/audio/voices returns 'default' even with empty dir."""
     resp = await client.get("/v1/audio/voices")
     assert resp.status_code == 200
     data = resp.json()
     assert data["object"] == "list"
-    assert len(data["data"]) == 2
-    names = {v["name"] for v in data["data"]}
-    assert names == {"default", "narrator"}
-    voice_client.list_voices.assert_called_once()
+    assert len(data["data"]) == 1
+    assert data["data"][0]["name"] == "default"
 
 
-async def test_get_voice(client: AsyncClient, voice_client: AsyncMock):
-    """GET /v1/audio/voices/{name} returns a voice object."""
+async def test_list_voices_with_files(client: AsyncClient, tmp_path):
+    """GET /v1/audio/voices includes disk voices alongside 'default'."""
+    (tmp_path / "alice.wav").write_bytes(_WAV_HEADER)
+    (tmp_path / "bob.wav").write_bytes(_WAV_HEADER)
+    resp = await client.get("/v1/audio/voices")
+    assert resp.status_code == 200
+    names = [v["name"] for v in resp.json()["data"]]
+    assert names == ["default", "alice", "bob"]
+
+
+async def test_get_voice(client: AsyncClient):
+    """GET /v1/audio/voices/default returns the built-in default voice."""
     resp = await client.get("/v1/audio/voices/default")
     assert resp.status_code == 200
     data = resp.json()
     assert data["voice_id"] == "default"
     assert data["name"] == "default"
-    voice_client.get_voice.assert_called_once_with("default")
 
 
-async def test_get_voice_not_found(client: AsyncClient, voice_client: AsyncMock):
-    """GET /v1/audio/voices/{name} returns 404 when client raises."""
-    from fastapi import HTTPException
-
-    voice_client.get_voice.side_effect = HTTPException(status_code=404, detail="Not found")
+async def test_get_voice_not_found(client: AsyncClient):
+    """GET /v1/audio/voices/{name} returns 404 for unknown voices."""
     resp = await client.get("/v1/audio/voices/nonexistent")
     assert resp.status_code == 404
 
 
-async def test_create_voice(client: AsyncClient, voice_client: AsyncMock):
-    """POST /v1/audio/voices creates a new voice."""
+async def test_create_voice(client: AsyncClient, tmp_path):
+    """POST /v1/audio/voices creates a new voice on disk."""
     resp = await client.post(
         "/v1/audio/voices",
         data={"name": "newvoice"},
@@ -548,7 +646,7 @@ async def test_create_voice(client: AsyncClient, voice_client: AsyncMock):
     data = resp.json()
     assert data["voice_id"] == "newvoice"
     assert data["name"] == "newvoice"
-    voice_client.create_voice.assert_called_once_with("newvoice", _WAV_HEADER)
+    assert (tmp_path / "newvoice.wav").exists()
 
 
 async def test_create_voice_empty_file(client: AsyncClient):
@@ -561,11 +659,20 @@ async def test_create_voice_empty_file(client: AsyncClient):
     assert resp.status_code == 400
 
 
-async def test_create_voice_conflict(client: AsyncClient, voice_client: AsyncMock):
-    """POST /v1/audio/voices returns 409 when client raises conflict."""
-    from fastapi import HTTPException
+async def test_create_voice_invalid_name(client: AsyncClient):
+    """POST /v1/audio/voices rejects invalid voice names."""
+    resp = await client.post(
+        "/v1/audio/voices",
+        data={"name": "bad name!"},
+        files={"file": ("sample.wav", _WAV_HEADER, "audio/wav")},
+    )
+    assert resp.status_code == 400
+    assert "alphanumeric" in resp.json()["detail"]
 
-    voice_client.create_voice.side_effect = HTTPException(status_code=409, detail="Already exists")
+
+async def test_create_voice_duplicate(client: AsyncClient, tmp_path):
+    """POST /v1/audio/voices returns 409 for existing voices."""
+    (tmp_path / "existing.wav").write_bytes(_WAV_HEADER)
     resp = await client.post(
         "/v1/audio/voices",
         data={"name": "existing"},
@@ -574,22 +681,62 @@ async def test_create_voice_conflict(client: AsyncClient, voice_client: AsyncMoc
     assert resp.status_code == 409
 
 
-async def test_delete_voice(client: AsyncClient, voice_client: AsyncMock):
-    """DELETE /v1/audio/voices/{name} deletes a voice."""
-    resp = await client.delete("/v1/audio/voices/default")
+async def test_create_voice_not_wav(client: AsyncClient):
+    """POST /v1/audio/voices rejects non-WAV files."""
+    resp = await client.post(
+        "/v1/audio/voices",
+        data={"name": "bad"},
+        files={"file": ("sample.mp3", b"\xff\xfb\x90\x00" + b"\x00" * 100, "audio/mpeg")},
+    )
+    assert resp.status_code == 400
+    assert "not a valid WAV" in resp.json()["detail"]
+
+
+async def test_create_voice_too_small(client: AsyncClient):
+    """POST /v1/audio/voices rejects files too small to be WAV."""
+    resp = await client.post(
+        "/v1/audio/voices",
+        data={"name": "tiny"},
+        files={"file": ("sample.wav", b"RIFF", "audio/wav")},
+    )
+    assert resp.status_code == 400
+    assert "too small" in resp.json()["detail"].lower()
+
+
+async def test_create_voice_default_rejected(client: AsyncClient):
+    """POST /v1/audio/voices rejects 'default' (reserved built-in name)."""
+    resp = await client.post(
+        "/v1/audio/voices",
+        data={"name": "default"},
+        files={"file": ("sample.wav", _WAV_HEADER, "audio/wav")},
+    )
+    assert resp.status_code == 400
+    assert "built-in" in resp.json()["detail"]
+
+
+async def test_delete_voice(client: AsyncClient, tmp_path):
+    """DELETE /v1/audio/voices/{name} removes the voice file."""
+    voice_file = tmp_path / "todelete.wav"
+    voice_file.write_bytes(_WAV_HEADER)
+    resp = await client.delete("/v1/audio/voices/todelete")
     assert resp.status_code == 200
     data = resp.json()
     assert data["deleted"] is True
-    voice_client.delete_voice.assert_called_once_with("default")
+    assert data["voice_id"] == "todelete"
+    assert not voice_file.exists()
 
 
-async def test_delete_voice_not_found(client: AsyncClient, voice_client: AsyncMock):
-    """DELETE /v1/audio/voices/{name} returns 404 when client raises."""
-    from fastapi import HTTPException
-
-    voice_client.delete_voice.side_effect = HTTPException(status_code=404, detail="Not found")
+async def test_delete_voice_not_found(client: AsyncClient):
+    """DELETE /v1/audio/voices/{name} returns 404 for unknown voices."""
     resp = await client.delete("/v1/audio/voices/nonexistent")
     assert resp.status_code == 404
+
+
+async def test_delete_default_voice_rejected(client: AsyncClient):
+    """DELETE /v1/audio/voices/default is rejected (built-in)."""
+    resp = await client.delete("/v1/audio/voices/default")
+    assert resp.status_code == 400
+    assert "built-in" in resp.json()["detail"]
 
 
 async def test_voice_client_unavailable():
@@ -609,4 +756,239 @@ async def test_voice_client_unavailable():
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
         resp = await c.get("/v1/audio/voices")
+    assert resp.status_code == 503
+
+
+# ---------------------------------------------------------------------------
+# Chat
+# ---------------------------------------------------------------------------
+
+
+async def test_chat_completions(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/chat/completions returns a chat completion response."""
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["object"] == "chat.completion"
+    assert data["choices"][0]["message"]["content"] == "Hello! How can I help you?"
+    chat_client.forward.assert_called_once_with(
+        "/v1/chat/completions",
+        {"model": "my-model", "messages": [{"role": "user", "content": "Hello"}]},
+    )
+
+
+async def test_chat_completions_stream(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/chat/completions with stream=true returns an SSE stream."""
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "stream": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    assert "data:" in resp.text
+    chat_client.forward_stream.assert_called_once_with(
+        "/v1/chat/completions",
+        {"model": "my-model", "messages": [{"role": "user", "content": "Hello"}], "stream": True},
+    )
+
+
+async def test_chat_completions_backend_unavailable(
+    client: AsyncClient, chat_client: AsyncMock
+):
+    """Gateway returns 502 when the chat backend raises."""
+    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+    assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# Completions (legacy)
+# ---------------------------------------------------------------------------
+
+
+async def test_text_completions(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/completions returns a text completion response."""
+    chat_client.forward.return_value = MOCK_COMPLETION
+    resp = await client.post(
+        "/v1/completions",
+        json={"model": "my-model", "prompt": "Hello"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["object"] == "text_completion"
+    assert data["choices"][0]["text"] == "Hello world"
+    chat_client.forward.assert_called_once_with(
+        "/v1/completions",
+        {"model": "my-model", "prompt": "Hello"},
+    )
+
+
+async def test_text_completions_stream(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/completions with stream=true returns an SSE stream."""
+    resp = await client.post(
+        "/v1/completions",
+        json={"model": "my-model", "prompt": "Hello", "stream": True},
+    )
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    chat_client.forward_stream.assert_called_once()
+
+
+async def test_text_completions_backend_unavailable(
+    client: AsyncClient, chat_client: AsyncMock
+):
+    """Gateway returns 502 when the chat backend raises for completions."""
+    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    resp = await client.post(
+        "/v1/completions",
+        json={"model": "my-model", "prompt": "Hello"},
+    )
+    assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# Responses
+# ---------------------------------------------------------------------------
+
+
+async def test_responses(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/responses returns a response object."""
+    chat_client.forward.return_value = MOCK_RESPONSE
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "Hello",
+        },
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["object"] == "response"
+    assert data["status"] == "completed"
+    assert data["output"][0]["content"][0]["text"] == "Hello! How can I help?"
+    chat_client.forward.assert_called_once_with(
+        "/v1/responses",
+        {"model": "my-model", "input": "Hello"},
+    )
+
+
+async def test_responses_stream(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/responses with stream=true returns an SSE stream."""
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "Hello",
+            "stream": True,
+        },
+    )
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    chat_client.forward_stream.assert_called_once_with(
+        "/v1/responses",
+        {"model": "my-model", "input": "Hello", "stream": True},
+    )
+
+
+async def test_responses_backend_unavailable(client: AsyncClient, chat_client: AsyncMock):
+    """Gateway returns 502 when the chat backend raises for responses."""
+    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    resp = await client.post(
+        "/v1/responses",
+        json={"model": "my-model", "input": "Hello"},
+    )
+    assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# Embeddings
+# ---------------------------------------------------------------------------
+
+
+async def test_embeddings(client: AsyncClient, chat_client: AsyncMock):
+    """POST /v1/embeddings returns an embeddings response."""
+    chat_client.forward.return_value = MOCK_EMBEDDINGS
+    resp = await client.post(
+        "/v1/embeddings",
+        json={"model": "my-model", "input": "Hello world"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["object"] == "list"
+    assert len(data["data"]) == 1
+    assert data["data"][0]["embedding"] == [0.1, 0.2, 0.3]
+    chat_client.forward.assert_called_once_with(
+        "/v1/embeddings",
+        {"model": "my-model", "input": "Hello world"},
+    )
+
+
+async def test_embeddings_backend_unavailable(client: AsyncClient, chat_client: AsyncMock):
+    """Gateway returns 502 when the chat backend raises for embeddings."""
+    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    resp = await client.post(
+        "/v1/embeddings",
+        json={"model": "my-model", "input": "Hello world"},
+    )
+    assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# LLM backend: no client configured
+# ---------------------------------------------------------------------------
+
+
+async def test_llm_client_unavailable():
+    """Gateway returns 503 for all LLM endpoints when no chat client is configured."""
+    from fastapi import FastAPI
+
+    from gateway_service.routes import completions, embeddings, responses
+    from gateway_service.routes.chat import router as chat_router
+
+    @asynccontextmanager
+    async def noop_lifespan(_: FastAPI) -> AsyncIterator[None]:
+        yield
+
+    test_app = FastAPI(lifespan=noop_lifespan)
+    test_app.include_router(chat_router)
+    test_app.include_router(completions.router)
+    test_app.include_router(responses.router)
+    test_app.include_router(embeddings.router)
+    # No chat client on state
+
+    transport = ASGITransport(app=test_app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post(
+            "/v1/chat/completions",
+            json={"model": "x", "messages": [{"role": "user", "content": "hi"}]},
+        )
+    assert resp.status_code == 503
+
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/v1/completions", json={"model": "x", "prompt": "hi"})
+    assert resp.status_code == 503
+
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/v1/responses", json={"model": "x", "input": "hi"})
+    assert resp.status_code == 503
+
+    async with AsyncClient(transport=transport, base_url="http://test") as c:
+        resp = await c.post("/v1/embeddings", json={"model": "x", "input": "hi"})
     assert resp.status_code == 503
