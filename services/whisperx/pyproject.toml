@@ -1,13 +1,12 @@
 [project]
 name = "whisperx-service"
-version = "0.1.0"
-description = "OpenAI-compatible speech-to-text API backed by WhisperX"
+version = "0.2.0"
+description = "WhisperX STT backend service (Starlette RPC)"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115",
+    "starlette>=0.45",
     "uvicorn[standard]>=0.34",
     "pydantic-settings>=2.7",
-    "trave-common",
     "python-multipart>=0.0.9",
     "whisperx>=3.8",
 ]
@@ -45,9 +44,6 @@ select = [
     "TCH",  # flake8-type-checking
     "RUF",  # ruff-specific rules
 ]
-ignore = [
-    "B008",  # function calls in defaults (FastAPI's File/Form/Depends pattern)
-]
 
 [tool.ruff.lint.isort]
 known-first-party = ["whisperx_service"]
@@ -59,7 +55,6 @@ asyncio_mode = "auto"
 # WhisperX requires PyTorch with CUDA -- use uv index overrides for the
 # correct wheel index.
 [tool.uv.sources]
-trave-common = { path = "../../libs/trave-common", editable = true }
 torch = [
     { index = "pytorch-cpu", marker = "sys_platform == 'darwin'" },
     { index = "pytorch", marker = "sys_platform != 'darwin'" },

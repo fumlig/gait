@@ -1,6 +1,6 @@
 # chatterbox
 
-OpenAI-compatible TTS API backed by [Chatterbox](https://github.com/resemble-ai/chatterbox) models from Resemble AI.
+TTS backend service backed by [Chatterbox](https://github.com/resemble-ai/chatterbox) models from Resemble AI. This is a thin Starlette app that exposes raw RPC endpoints — the gateway handles OpenAI API compatibility.
 
 Three model variants run in a single container. The default model is preloaded at startup; others are loaded lazily on first request.
 
@@ -14,67 +14,33 @@ All variants support paralinguistic tags like `[laugh]`, `[sigh]`, etc. embedded
 
 ## Endpoints
 
-### `POST /v1/audio/speech`
+These are internal RPC endpoints consumed by the gateway. End users interact with the OpenAI-compatible API on the gateway.
 
-Generate speech from text. Compatible with the [OpenAI TTS API](https://platform.openai.com/docs/api-reference/audio/createSpeech).
+### `POST /synthesize`
 
-**Standard OpenAI parameters:**
+Generate speech from text. Returns raw `audio/wav` binary.
+
+**JSON body:**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `model` | string | yes | -- | `chatterbox-turbo`, `chatterbox`, `chatterbox-multilingual` (also `tts-1`, `tts-1-hd`) |
-| `input` | string | yes | -- | Text to synthesize (max 4096 chars) |
+| `text` | string | yes | -- | Text to synthesize |
 | `voice` | string | yes | -- | Name of a registered voice, or any string when no voices are registered |
-| `response_format` | string | no | `mp3` | `mp3` or `wav` |
-| `speed` | float | no | `1.0` | Playback speed multiplier (`0.25` -- `4.0`) |
+| `model` | string | yes | -- | `chatterbox-turbo`, `chatterbox`, `chatterbox-multilingual` (also `tts-1`, `tts-1-hd`) |
+| `speed` | float | no | `1.0` | Playback speed multiplier |
+| `language` | string | no | `null` | ISO 639-1 code (required for `chatterbox-multilingual`) |
+| `exaggeration` | float | no | `0.5` | Emotion exaggeration (`0.0` -- `2.0`) |
+| `cfg_weight` | float | no | `0.5` | Classifier-free guidance for pace (`0.0` -- `1.0`) |
+| `temperature` | float | no | `0.8` | Sampling temperature (`0.01` -- `5.0`) |
+| `repetition_penalty` | float | no | `1.2` | Token repetition penalty (`1.0` -- `3.0`) |
+| `top_p` | float | no | `1.0` | Nucleus sampling threshold (`0.0` -- `1.0`) |
+| `min_p` | float | no | `0.05` | Min-p sampling threshold (`0.0` -- `1.0`) |
+| `top_k` | int | no | `1000` | Top-k sampling (>= 1) |
+| `seed` | int | no | `null` | Random seed for reproducibility |
 
-**Extended parameters (Chatterbox-specific):**
+### `GET /models`
 
-| Parameter | Type | Default | Models | Description |
-|-----------|------|---------|--------|-------------|
-| `language` | string | `null` | multilingual | ISO 639-1 code. Required for `chatterbox-multilingual` |
-| `exaggeration` | float | `0.5` | original, multilingual | Emotion exaggeration (`0.0` -- `2.0`) |
-| `cfg_weight` | float | `0.5` | original, multilingual | Classifier-free guidance for pace (`0.0` -- `1.0`) |
-| `temperature` | float | `0.8` | all | Sampling temperature (`0.01` -- `5.0`) |
-| `repetition_penalty` | float | `1.2` | all | Token repetition penalty (`1.0` -- `3.0`) |
-| `top_p` | float | `1.0` | all | Nucleus sampling threshold (`0.0` -- `1.0`) |
-| `min_p` | float | `0.05` | original, multilingual | Min-p sampling threshold (`0.0` -- `1.0`) |
-| `top_k` | int | `1000` | turbo | Top-k sampling (>= 1) |
-| `seed` | int | `null` | all | Random seed for reproducibility |
-
-```bash
-# Turbo (fast, English)
-curl http://localhost:8100/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model":"chatterbox-turbo","input":"Hello world!","voice":"default"}' \
-  --output speech.mp3
-
-# Original (high quality, English)
-curl http://localhost:8100/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model":"chatterbox","input":"Hello world!","voice":"default","exaggeration":0.8}' \
-  --output speech_hd.mp3
-
-# Multilingual (French)
-curl http://localhost:8100/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model":"chatterbox-multilingual","input":"Bonjour le monde!","voice":"default","language":"fr"}' \
-  --output speech_fr.mp3
-
-# Using OpenAI alias
-curl http://localhost:8100/v1/audio/speech \
-  -H "Content-Type: application/json" \
-  -d '{"model":"tts-1","input":"Drop-in compatible!","voice":"default"}' \
-  --output speech_alias.mp3
-```
-
-### Supported languages
-
-`chatterbox-multilingual` supports: ar (Arabic), da (Danish), de (German), el (Greek), en (English), es (Spanish), fi (Finnish), fr (French), he (Hebrew), hi (Hindi), it (Italian), ja (Japanese), ko (Korean), ms (Malay), nl (Dutch), no (Norwegian), pl (Polish), pt (Portuguese), ru (Russian), sv (Swedish), sw (Swahili), tr (Turkish), zh (Chinese).
-
-### `GET /v1/models`
-
-List available models. Returns an OpenAI-compatible model list with all three variants.
+List available models. Returns `{ "object": "list", "data": [{ "id", "object", "owned_by" }] }`.
 
 ### `GET /health`
 
@@ -92,9 +58,13 @@ Returns service health with per-model loaded status:
 }
 ```
 
+### Supported languages
+
+`chatterbox-multilingual` supports: ar (Arabic), da (Danish), de (German), el (Greek), en (English), es (Spanish), fi (Finnish), fr (French), he (Hebrew), hi (Hindi), it (Italian), ja (Japanese), ko (Korean), ms (Malay), nl (Dutch), no (Norwegian), pl (Polish), pt (Portuguese), ru (Russian), sv (Swedish), sw (Swahili), tr (Turkish), zh (Chinese).
+
 ## Voices
 
-Place `.wav` reference clips (~10 seconds of clean speech) in the `voices/` directory. The filename stem becomes the voice name:
+Voice reference clips (`.wav` files, ~10 seconds of clean speech) are stored in the `VOICES_DIR` directory (shared with the voice service via a Docker volume). The filename stem becomes the voice name:
 
 ```
 voices/
@@ -103,6 +73,8 @@ voices/
 ```
 
 When no voice files are registered, any voice name is accepted and Chatterbox uses its default voice (no cloning). When voices are registered, unknown names return a 400 error.
+
+Voice clips are managed through the voice service (or the gateway's `/v1/audio/voices` endpoint), not through this service directly.
 
 ## Configuration
 
@@ -115,8 +87,7 @@ All settings are configurable via environment variables (no prefix, case-insensi
 | `PORT` | `8000` | Server bind port |
 | `DEFAULT_MODEL` | `chatterbox-turbo` | Model to preload at startup (others load on demand) |
 | `VOICES_DIR` | `/app/voices` | Path to voice reference clips inside the container |
-| `MAX_INPUT_LENGTH` | `4096` | Maximum input text length (characters) |
-| `STREAM_CHUNK_SIZE` | `4096` | Streaming response chunk size in bytes |
+| `MODEL_CACHE_DIR` | `/root/.cache/huggingface` | HuggingFace model cache directory |
 | `HF_TOKEN` | -- | HuggingFace token (required for gated model access) |
 
 ## Development
@@ -143,13 +114,7 @@ Two additional dependency pins are required:
 
 ```
 src/chatterbox_service/
-  main.py          # FastAPI app + lifespan (preload default model)
-  config.py        # Pydantic settings from env vars
-  models.py        # Request/response schemas
-  engine.py        # Multi-model loading, voice resolution, inference
-  audio.py         # WAV/MP3 encoding + chunked streaming
-  routes/
-    speech.py      # POST /v1/audio/speech
-    models.py      # GET /v1/models
-    health.py      # GET /health
+  app.py         # Starlette app (RPC endpoints: /synthesize, /models, /health)
+  config.py      # Pydantic settings from env vars
+  engine.py      # Multi-model loading, voice resolution, inference
 ```

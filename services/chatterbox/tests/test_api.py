@@ -1,4 +1,4 @@
-"""Tests for the Chatterbox TTS API endpoints.
+"""Tests for the Chatterbox TTS backend (Starlette).
 
 These tests mock the engine so they can run without a GPU or model weights.
 """
@@ -30,36 +30,35 @@ def mock_engine():
             "chatterbox": False,
             "chatterbox-multilingual": False,
         }
-        eng.list_voices.return_value = ["default"]
         eng.generate.return_value = (DUMMY_WAV, SAMPLE_RATE)
         eng.ensure_model.return_value = "chatterbox-turbo"
-        # Also patch the engine used in routes (same singleton)
-        with (
-            patch("chatterbox_service.routes.speech.engine", eng),
-            patch("chatterbox_service.routes.health.engine", eng),
-        ):
+        # Also patch the engine used in app.py (same singleton)
+        with patch("chatterbox_service.app.engine", eng):
             yield eng
 
 
 @pytest.fixture()
 def app(mock_engine):
     """Create a test app that skips the real lifespan (model loading)."""
-    from collections.abc import AsyncIterator  # noqa: TC003 — runtime use in return annotation
     from contextlib import asynccontextmanager
 
-    from fastapi import FastAPI
+    from starlette.applications import Starlette
+    from starlette.routing import Route
 
-    from chatterbox_service.routes import health, models, speech
+    from chatterbox_service.app import health, list_models, synthesize
 
     @asynccontextmanager
-    async def noop_lifespan(_: FastAPI) -> AsyncIterator[None]:
+    async def noop_lifespan(_app):
         yield
 
-    test_app = FastAPI(lifespan=noop_lifespan)
-    test_app.include_router(speech.router)
-    test_app.include_router(models.router)
-    test_app.include_router(health.router)
-    return test_app
+    return Starlette(
+        routes=[
+            Route("/synthesize", synthesize, methods=["POST"]),
+            Route("/models", list_models, methods=["GET"]),
+            Route("/health", health, methods=["GET"]),
+        ],
+        lifespan=noop_lifespan,
+    )
 
 
 @pytest.fixture()
@@ -98,7 +97,7 @@ async def test_health_shows_per_model_status(client: AsyncClient):
 
 
 async def test_list_models(client: AsyncClient):
-    resp = await client.get("/v1/models")
+    resp = await client.get("/models")
     assert resp.status_code == 200
     data = resp.json()
     assert data["object"] == "list"
@@ -108,62 +107,45 @@ async def test_list_models(client: AsyncClient):
 
 
 async def test_list_models_owned_by(client: AsyncClient):
-    resp = await client.get("/v1/models")
+    resp = await client.get("/models")
     data = resp.json()
     for model in data["data"]:
         assert model["owned_by"] == "resemble-ai"
 
 
 # ---------------------------------------------------------------------------
-# Speech — basic generation
+# Synthesize — basic generation
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_mp3(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_returns_wav(client: AsyncClient, mock_engine: MagicMock):
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox-turbo",
-            "input": "Hello world",
+            "text": "Hello world",
             "voice": "default",
-            "response_format": "mp3",
-        },
-    )
-    assert resp.status_code == 200
-    assert resp.headers["content-type"] == "audio/mpeg"
-    assert len(resp.content) > 0
-    mock_engine.generate.assert_called_once()
-
-
-async def test_speech_wav(client: AsyncClient, mock_engine: MagicMock):
-    resp = await client.post(
-        "/v1/audio/speech",
-        json={
-            "model": "chatterbox-turbo",
-            "input": "Hello world",
-            "voice": "default",
-            "response_format": "wav",
         },
     )
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "audio/wav"
-    # WAV files start with "RIFF"
     assert resp.content[:4] == b"RIFF"
+    mock_engine.generate.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
-# Speech — model aliases
+# Synthesize — model aliases
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_alias_tts1(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_alias_tts1(client: AsyncClient, mock_engine: MagicMock):
     """tts-1 should be accepted and resolved by ensure_model."""
     mock_engine.ensure_model.return_value = "chatterbox-turbo"
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "tts-1",
-            "input": "Alias test",
+            "text": "Alias test",
             "voice": "default",
         },
     )
@@ -171,14 +153,14 @@ async def test_speech_alias_tts1(client: AsyncClient, mock_engine: MagicMock):
     mock_engine.ensure_model.assert_called_with("tts-1")
 
 
-async def test_speech_alias_tts1hd(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_alias_tts1hd(client: AsyncClient, mock_engine: MagicMock):
     """tts-1-hd should be accepted and resolved by ensure_model."""
     mock_engine.ensure_model.return_value = "chatterbox"
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "tts-1-hd",
-            "input": "Alias test",
+            "text": "Alias test",
             "voice": "default",
         },
     )
@@ -187,18 +169,18 @@ async def test_speech_alias_tts1hd(client: AsyncClient, mock_engine: MagicMock):
 
 
 # ---------------------------------------------------------------------------
-# Speech — chatterbox (original) model
+# Synthesize — original model parameters
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_original_model(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_original_model(client: AsyncClient, mock_engine: MagicMock):
     """The original chatterbox model should accept exaggeration and cfg_weight."""
     mock_engine.ensure_model.return_value = "chatterbox"
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox",
-            "input": "Original model test",
+            "text": "Original model test",
             "voice": "default",
             "exaggeration": 0.8,
             "cfg_weight": 0.7,
@@ -212,18 +194,18 @@ async def test_speech_original_model(client: AsyncClient, mock_engine: MagicMock
 
 
 # ---------------------------------------------------------------------------
-# Speech — multilingual model
+# Synthesize — multilingual model
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_multilingual(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_multilingual(client: AsyncClient, mock_engine: MagicMock):
     """Multilingual model with valid language should succeed."""
     mock_engine.ensure_model.return_value = "chatterbox-multilingual"
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox-multilingual",
-            "input": "Bonjour le monde",
+            "text": "Bonjour le monde",
             "voice": "default",
             "language": "fr",
         },
@@ -234,18 +216,20 @@ async def test_speech_multilingual(client: AsyncClient, mock_engine: MagicMock):
     assert call_kwargs.kwargs["language"] == "fr"
 
 
-async def test_speech_multilingual_missing_language(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_multilingual_missing_language(
+    client: AsyncClient, mock_engine: MagicMock
+):
     """Multilingual model without language should return 400."""
     mock_engine.ensure_model.return_value = "chatterbox-multilingual"
     with patch(
-        "chatterbox_service.routes.speech.validate_language",
+        "chatterbox_service.app.validate_language",
         side_effect=ValueError("'language' is required for chatterbox-multilingual."),
     ):
         resp = await client.post(
-            "/v1/audio/speech",
+            "/synthesize",
             json={
                 "model": "chatterbox-multilingual",
-                "input": "Missing language",
+                "text": "Missing language",
                 "voice": "default",
             },
         )
@@ -253,18 +237,20 @@ async def test_speech_multilingual_missing_language(client: AsyncClient, mock_en
     assert "language" in resp.json()["detail"].lower()
 
 
-async def test_speech_multilingual_invalid_language(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_multilingual_invalid_language(
+    client: AsyncClient, mock_engine: MagicMock
+):
     """Multilingual model with unsupported language should return 400."""
     mock_engine.ensure_model.return_value = "chatterbox-multilingual"
     with patch(
-        "chatterbox_service.routes.speech.validate_language",
+        "chatterbox_service.app.validate_language",
         side_effect=ValueError("Unsupported language 'xx'."),
     ):
         resp = await client.post(
-            "/v1/audio/speech",
+            "/synthesize",
             json={
                 "model": "chatterbox-multilingual",
-                "input": "Invalid language",
+                "text": "Invalid language",
                 "voice": "default",
                 "language": "xx",
             },
@@ -274,17 +260,17 @@ async def test_speech_multilingual_invalid_language(client: AsyncClient, mock_en
 
 
 # ---------------------------------------------------------------------------
-# Speech — extended parameters
+# Synthesize — extended parameters
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_with_seed(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_with_seed(client: AsyncClient, mock_engine: MagicMock):
     """Seed parameter should be passed through to engine."""
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox-turbo",
-            "input": "Seed test",
+            "text": "Seed test",
             "voice": "default",
             "seed": 42,
         },
@@ -294,13 +280,13 @@ async def test_speech_with_seed(client: AsyncClient, mock_engine: MagicMock):
     assert call_kwargs.kwargs["seed"] == 42
 
 
-async def test_speech_with_sampling_params(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_with_sampling_params(client: AsyncClient, mock_engine: MagicMock):
     """All sampling parameters should be passed through to engine."""
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox-turbo",
-            "input": "Sampling params test",
+            "text": "Sampling params test",
             "voice": "default",
             "temperature": 0.5,
             "repetition_penalty": 1.5,
@@ -317,56 +303,46 @@ async def test_speech_with_sampling_params(client: AsyncClient, mock_engine: Mag
 
 
 # ---------------------------------------------------------------------------
-# Speech — error cases
+# Synthesize — error cases
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_unknown_model(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_unknown_model(client: AsyncClient, mock_engine: MagicMock):
     mock_engine.ensure_model.side_effect = ValueError("Unknown model 'nonexistent'.")
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "nonexistent",
-            "input": "Hello",
+            "text": "Hello",
             "voice": "default",
         },
     )
     assert resp.status_code == 400
 
 
-async def test_speech_unknown_voice(client: AsyncClient):
+async def test_synthesize_missing_required_fields(client: AsyncClient):
+    resp = await client.post("/synthesize", json={"model": "chatterbox-turbo"})
+    assert resp.status_code == 400
+    assert "required" in resp.json()["detail"].lower()
+
+
+async def test_synthesize_invalid_json(client: AsyncClient):
     resp = await client.post(
-        "/v1/audio/speech",
-        json={
-            "model": "chatterbox-turbo",
-            "input": "Hello",
-            "voice": "nonexistent",
-        },
+        "/synthesize",
+        content=b"not json",
+        headers={"content-type": "application/json"},
     )
     assert resp.status_code == 400
 
 
-async def test_speech_speed_out_of_range(client: AsyncClient):
-    resp = await client.post(
-        "/v1/audio/speech",
-        json={
-            "model": "chatterbox-turbo",
-            "input": "Hello",
-            "voice": "default",
-            "speed": 5.0,
-        },
-    )
-    assert resp.status_code == 422  # validation error
-
-
-async def test_speech_generation_failure(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_generation_failure(client: AsyncClient, mock_engine: MagicMock):
     """Engine exception should result in 500."""
     mock_engine.generate.side_effect = RuntimeError("GPU out of memory")
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox-turbo",
-            "input": "Fail test",
+            "text": "Fail test",
             "voice": "default",
         },
     )
@@ -375,17 +351,17 @@ async def test_speech_generation_failure(client: AsyncClient, mock_engine: Magic
 
 
 # ---------------------------------------------------------------------------
-# Speech — default parameter values
+# Synthesize — default parameter values
 # ---------------------------------------------------------------------------
 
 
-async def test_speech_default_params(client: AsyncClient, mock_engine: MagicMock):
+async def test_synthesize_default_params(client: AsyncClient, mock_engine: MagicMock):
     """When only required fields are sent, defaults should be passed to engine."""
     resp = await client.post(
-        "/v1/audio/speech",
+        "/synthesize",
         json={
             "model": "chatterbox-turbo",
-            "input": "Defaults test",
+            "text": "Defaults test",
             "voice": "default",
         },
     )

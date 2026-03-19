@@ -1,12 +1,16 @@
 # whisperx
 
-OpenAI-compatible speech-to-text API backed by [WhisperX](https://github.com/m-bain/whisperX), which adds word-level alignment (via wav2vec2) and optional speaker diarization (via pyannote) on top of [faster-whisper](https://github.com/SYSTRAN/faster-whisper).
+STT backend service backed by [WhisperX](https://github.com/m-bain/whisperX), which adds word-level alignment (via wav2vec2) and optional speaker diarization (via pyannote) on top of [faster-whisper](https://github.com/SYSTRAN/faster-whisper). This is a thin Starlette app that exposes raw RPC endpoints — the gateway handles OpenAI API compatibility and response format conversion (JSON→SRT/VTT/text).
 
 ## Endpoints
 
-### `POST /v1/audio/transcriptions`
+These are internal RPC endpoints consumed by the gateway. End users interact with the OpenAI-compatible API on the gateway.
 
-Transcribe audio into text. Compatible with the [OpenAI Transcription API](https://platform.openai.com/docs/api-reference/audio/createTranscription).
+### `POST /transcribe`
+
+Transcribe audio to text (preserves source language). Returns raw JSON segments.
+
+**Multipart form data:**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
@@ -14,30 +18,16 @@ Transcribe audio into text. Compatible with the [OpenAI Transcription API](https
 | `model` | string | yes | -- | `whisper-1` (alias for default model) or a size like `large-v3`, `base`, `turbo`, etc. |
 | `language` | string | no | auto-detect | ISO-639-1 language code (e.g. `en`, `de`, `fr`) |
 | `prompt` | string | no | -- | Optional context to guide the model |
-| `response_format` | string | no | `json` | `json`, `text`, `srt`, `verbose_json`, `vtt` |
 | `temperature` | float | no | `0.0` | Sampling temperature |
-| `timestamp_granularities[]` | string[] | no | -- | `word` and/or `segment` (requires `verbose_json`) |
+| `word_timestamps` | bool | no | `false` | Include word-level timestamps in output |
 
-```bash
-curl http://localhost:8201/v1/audio/transcriptions \
-  -F file=@recording.wav \
-  -F model=whisper-1 \
-  -F response_format=verbose_json
-```
+### `POST /translate`
 
-### `POST /v1/audio/translations`
+Translate audio to English text. Same parameters as `/transcribe` except no `language` (always translates to English).
 
-Translate audio into English text. Same parameters as transcriptions except no `language` (always translates to English).
+### `GET /models`
 
-```bash
-curl http://localhost:8201/v1/audio/translations \
-  -F file=@german_audio.wav \
-  -F model=whisper-1
-```
-
-### `GET /v1/models`
-
-List available models. Returns an OpenAI-compatible model list.
+List available models. Returns `{ "object": "list", "data": [{ "id", "object", "owned_by" }] }`.
 
 ### `GET /health`
 
@@ -63,6 +53,7 @@ All settings are configurable via environment variables (no prefix, case-insensi
 | `COMPUTE_TYPE` | `float16` | Model precision (`float16`, `int8`, `float32`) |
 | `BATCH_SIZE` | `16` | Batch size for transcription |
 | `ENABLE_DIARIZATION` | `false` | Enable speaker diarization (requires `HF_TOKEN`) |
+| `MODEL_CACHE_DIR` | `/root/.cache/huggingface` | HuggingFace model cache directory |
 | `MAX_FILE_SIZE` | `26214400` | Maximum upload file size in bytes (default 25 MB) |
 | `HF_TOKEN` | -- | HuggingFace token (required for diarization with pyannote) |
 
@@ -88,13 +79,7 @@ PyTorch CUDA wheels are sourced from the official PyTorch index via `[tool.uv.so
 
 ```
 src/whisperx_service/
-  main.py          # FastAPI app + lifespan (model load/unload)
-  config.py        # Pydantic settings from env vars
-  models.py        # Request/response schemas
-  engine.py        # Model loading, alignment, diarization, inference
-  routes/
-    transcriptions.py  # POST /v1/audio/transcriptions
-    translations.py    # POST /v1/audio/translations
-    models.py          # GET /v1/models
-    health.py          # GET /health
+  app.py         # Starlette app (RPC endpoints: /transcribe, /translate, /models, /health)
+  config.py      # Pydantic settings from env vars
+  engine.py      # Model loading, alignment, diarization, inference
 ```

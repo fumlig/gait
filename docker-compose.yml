@@ -6,13 +6,16 @@ services:
     ports:
       - "${GATEWAY_PORT:-8080}:8000"
     environment:
-      - CHATTERBOX_URL=http://chatterbox:8000
-      - WHISPERX_URL=http://whisperx:8000
-      - PROXY_TIMEOUT=${PROXY_TIMEOUT:-300}
+      - SPEECH_URL=http://chatterbox:8000
+      - TRANSCRIPTION_URL=http://whisperx:8000
+      - VOICE_URL=http://voice:8000
+      - BACKEND_TIMEOUT=${BACKEND_TIMEOUT:-300}
     depends_on:
       chatterbox:
         condition: service_healthy
       whisperx:
+        condition: service_healthy
+      voice:
         condition: service_healthy
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
@@ -30,7 +33,7 @@ services:
       - "${CHATTERBOX_PORT:-8100}:8000"
     volumes:
       - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
-      - ${CHATTERBOX_VOICES_DIR:-./services/chatterbox/voices}:/app/voices
+      - ${VOICES_DIR:-./voices}:/app/voices
     environment:
       - DEVICE=${CHATTERBOX_DEVICE:-cuda}
       - DEFAULT_MODEL=${CHATTERBOX_DEFAULT_MODEL:-chatterbox-turbo}
@@ -78,4 +81,20 @@ services:
       timeout: 10s
       retries: 5
       start_period: 120s
+    restart: unless-stopped
+
+  voice:
+    build:
+      context: .
+      dockerfile: services/voice/Dockerfile
+    ports:
+      - "${VOICE_PORT:-8300}:8000"
+    volumes:
+      - ${VOICES_DIR:-./voices}:/app/voices
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 5s
     restart: unless-stopped

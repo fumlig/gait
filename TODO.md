@@ -9,3 +9,11 @@
 - Make sure volumes and other things that may be used by several services are put in the root
 - Integration tests using OpenAI API client
 - Make sure docker builds are as fast and small as possible by utilizing caching layers
+
+- Make backend services even thinner and have them accept kwargs over http. THe gateway is configured with all of it so that it can be overriden per request as well!
+
+
+
+
+- Make model services even slimmer - almost just RPC/remote stubs that the backend protocols in the gateways call. Can we use some simple RPC scheme here?
+- Turn the voice backend into its own service (that is just a file store). Provide access to the same volume to the chatterbox service.

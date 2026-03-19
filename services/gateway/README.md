@@ -1,24 +1,30 @@
 # gateway
 
-FastAPI reverse proxy that unifies all trave services behind a single port. Routes requests to the appropriate backend service based on the API path, and merges `/v1/models` responses from all backends.
+FastAPI gateway that exposes OpenAI-compatible REST APIs for all trave backend services. Handles request validation, response formatting (WAV→MP3, segments→SRT/VTT), and model list aggregation.
 
 ## Endpoints
 
 ### `POST /v1/audio/speech`
 
-Proxied to the **chatterbox** backend. See [chatterbox README](../chatterbox/README.md) for parameters.
+Generate speech. Maps the OpenAI TTS API to the chatterbox backend's `/synthesize` endpoint. See [chatterbox README](../chatterbox/README.md) for model-specific parameters.
 
 ### `POST /v1/audio/transcriptions`
 
-Proxied to the **whisperx** backend. See [whisperx README](../whisperx/README.md) for parameters.
+Transcribe audio. Maps the OpenAI Transcription API to the whisperx backend's `/transcribe` endpoint. See [whisperx README](../whisperx/README.md) for model details.
+
+Supports `response_format`: `json`, `text`, `srt`, `verbose_json`, `vtt`. Format conversion from raw backend JSON is handled by the gateway.
 
 ### `POST /v1/audio/translations`
 
-Proxied to the **whisperx** backend. See [whisperx README](../whisperx/README.md) for parameters.
+Translate audio to English. Maps to whisperx's `/translate` endpoint. Same format options as transcriptions.
+
+### `GET /v1/audio/voices`
+
+Voice management (proxied to the voice service). Supports listing, creating, and deleting voice reference clips.
 
 ### `GET /v1/models`
 
-Returns a merged, deduplicated list of models from all backend services. If a backend is unreachable, its models are omitted (no error).
+Returns a merged list of models from all backend services. Models are fetched once at startup and cached.
 
 ### `GET /health`
 
@@ -28,8 +34,9 @@ Returns gateway status and per-backend health:
 {
   "status": "ok",
   "backends": {
-    "chatterbox": "healthy",
-    "whisperx": "healthy"
+    "speech": "healthy",
+    "transcription": "healthy",
+    "voice": "healthy"
   }
 }
 ```
@@ -42,9 +49,10 @@ Status is `"ok"` when all backends are healthy, `"degraded"` otherwise.
 |----------|---------|-------------|
 | `HOST` | `0.0.0.0` | Server bind address |
 | `PORT` | `8000` | Server bind port |
-| `CHATTERBOX_URL` | `http://chatterbox:8000` | Internal URL for the chatterbox service |
-| `WHISPERX_URL` | `http://whisperx:8000` | Internal URL for the whisperx service |
-| `PROXY_TIMEOUT` | `300` | Timeout in seconds for proxied requests |
+| `SPEECH_URL` | `http://chatterbox:8000` | Internal URL for the chatterbox (TTS) service |
+| `TRANSCRIPTION_URL` | `http://whisperx:8000` | Internal URL for the whisperx (STT) service |
+| `VOICE_URL` | `http://voice:8000` | Internal URL for the voice management service |
+| `BACKEND_TIMEOUT` | `300` | Timeout in seconds for backend requests |
 
 ## Development
 
@@ -53,7 +61,7 @@ Requires Python 3.12 (pinned in `.python-version`; `uv` auto-downloads it if mis
 ```bash
 uv sync --all-extras      # creates .venv with Python 3.12, installs all deps + dev tools
 uv run ruff check src/    # lint
-uv run pytest             # tests (mocked httpx client, no backends needed)
+uv run pytest             # tests (mocked clients, no backends needed)
 ```
 
 For IDE support (e.g. VS Code / PyCharm), point the Python interpreter at `services/gateway/.venv/bin/python`.
@@ -62,12 +70,22 @@ For IDE support (e.g. VS Code / PyCharm), point the Python interpreter at `servi
 
 ```
 src/gateway_service/
-  main.py          # FastAPI app + lifespan (httpx client lifecycle)
+  main.py          # FastAPI app + lifespan (client init, model discovery)
   config.py        # Pydantic settings from env vars
-  models.py        # Response schemas
-  proxy.py         # httpx reverse proxy logic
+  models.py        # Response schemas (ModelObject, HealthResponse, etc.)
+  formatting.py    # Format conversion (WAV→MP3, segments→SRT/VTT)
+  clients/
+    speech.py        # Typed HTTP client for chatterbox (/synthesize)
+    transcription.py # Typed HTTP client for whisperx (/transcribe, /translate)
+    voice.py         # Typed HTTP client for voice service (/voices)
   routes/
-    audio.py       # POST /v1/audio/* (proxied)
-    models.py      # GET /v1/models (merged from backends)
-    health.py      # GET /health (aggregated backend status)
+    health.py        # GET /health (aggregated backend status)
+    models.py        # GET /v1/models (cached model list)
+    audio/
+      speech.py          # POST /v1/audio/speech
+      transcriptions.py  # POST /v1/audio/transcriptions
+      translations.py    # POST /v1/audio/translations
+      voices.py          # Voice management (proxied to voice service)
 ```
+
+Clients are stored on `app.state` (e.g. `request.app.state.speech_client`). No registry or dynamic discovery — backend URLs come from static environment variables.

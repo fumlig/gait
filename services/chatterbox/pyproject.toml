@@ -1,15 +1,13 @@
 [project]
 name = "chatterbox-service"
-version = "0.1.0"
-description = "OpenAI-compatible TTS API backed by Chatterbox models"
+version = "0.2.0"
+description = "Chatterbox TTS backend service (Starlette RPC)"
 requires-python = ">=3.11"
 dependencies = [
-    "fastapi>=0.115",
+    "starlette>=0.45",
     "uvicorn[standard]>=0.34",
     "pydantic-settings>=2.7",
-    "trave-common",
     "chatterbox-tts>=0.1.6",
-    "pydub>=0.25",
     # pin onnx to avoid ml-dtypes incompatibility (onnx>=1.17 needs
     # ml-dtypes>=0.5 which conflicts with chatterbox's numpy<1.26 pin)
     "onnx<1.17",
@@ -58,6 +56,3 @@ known-first-party = ["chatterbox_service"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-
-[tool.uv.sources]
-trave-common = { path = "../../libs/trave-common", editable = true }

@@ -33,8 +33,7 @@ ENV HOST=0.0.0.0 \
     BATCH_SIZE=16 \
     ENABLE_DIARIZATION=false
 
-# Copy shared library and project metadata first for layer caching
-COPY libs/trave-common/ /app/libs/trave-common/
+# Copy project metadata first for layer caching
 COPY services/whisperx/pyproject.toml ./
 RUN uv sync --no-dev --no-install-project
 
@@ -44,4 +43,4 @@ RUN uv sync --no-dev
 
 EXPOSE ${PORT}
 
-CMD ["sh", "-c", "uv run uvicorn whisperx_service.main:app --host ${HOST} --port ${PORT}"]
+CMD ["sh", "-c", "uv run uvicorn whisperx_service.app:app --host ${HOST} --port ${PORT}"]

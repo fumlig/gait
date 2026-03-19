@@ -28,12 +28,6 @@ class Settings(BaseSettings):
     # HuggingFace model cache directory (mounted from host)
     model_cache_dir: Path = Path("/root/.cache/huggingface")
 
-    # Maximum input text length (characters)
-    max_input_length: int = 4096
-
-    # Streaming chunk size in bytes when sending audio response
-    stream_chunk_size: int = 4096
-
     model_config = {"env_prefix": "", "case_sensitive": False}
 
 

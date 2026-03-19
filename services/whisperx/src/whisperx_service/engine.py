@@ -10,9 +10,27 @@ from typing import Any
 import torch
 
 from whisperx_service.config import settings
-from whisperx_service.models import WHISPER_MODEL_SIZES
 
 logger = logging.getLogger(__name__)
+
+# Valid whisper model sizes that WhisperX supports.
+WHISPER_MODEL_SIZES = frozenset(
+    {
+        "tiny",
+        "tiny.en",
+        "base",
+        "base.en",
+        "small",
+        "small.en",
+        "medium",
+        "medium.en",
+        "large",
+        "large-v1",
+        "large-v2",
+        "large-v3",
+        "turbo",
+    }
+)
 
 
 class WhisperXEngine:

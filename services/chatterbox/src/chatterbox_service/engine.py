@@ -11,10 +11,39 @@ import torch
 import torchaudio
 
 from chatterbox_service.config import settings
-from chatterbox_service.models import SUPPORTED_LANGUAGES
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Language support
+# ---------------------------------------------------------------------------
+
+SUPPORTED_LANGUAGES: dict[str, str] = {
+    "ar": "Arabic",
+    "da": "Danish",
+    "de": "German",
+    "el": "Greek",
+    "en": "English",
+    "es": "Spanish",
+    "fi": "Finnish",
+    "fr": "French",
+    "he": "Hebrew",
+    "hi": "Hindi",
+    "it": "Italian",
+    "ja": "Japanese",
+    "ko": "Korean",
+    "ms": "Malay",
+    "nl": "Dutch",
+    "no": "Norwegian",
+    "pl": "Polish",
+    "pt": "Portuguese",
+    "ru": "Russian",
+    "sv": "Swedish",
+    "sw": "Swahili",
+    "tr": "Turkish",
+    "zh": "Chinese",
+}
 
 logger = logging.getLogger(__name__)
 
@@ -164,7 +193,13 @@ class ChatterboxEngine:
         return sorted(p.stem for p in voices_dir.glob("*.wav"))
 
     def _resolve_voice(self, voice: str) -> Path | None:
-        """Map a voice name to its reference .wav path, or None for default."""
+        """Map a voice name to its reference .wav path, or None for default.
+
+        The special name ``"default"`` always resolves to ``None``, which
+        tells the chatterbox library to use its built-in default voice.
+        """
+        if voice == "default":
+            return None
         path = settings.voices_dir / f"{voice}.wav"
         if path.is_file():
             return path
