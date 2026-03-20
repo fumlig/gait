@@ -23,6 +23,10 @@ from openai import OpenAI
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:3000")
 OUTPUT_DIR = Path(__file__).parent / "test_outputs"
 
+# llama.cpp + Qwen3: disable thinking by default to speed up tests.
+# Pass as extra_body to the OpenAI client.
+NO_THINK = {"chat_template_kwargs": {"enable_thinking": False}}
+
 
 def _save(name: str, data: str | bytes, binary: bool = False) -> Path:
     """Persist test output to OUTPUT_DIR and return the path."""
@@ -542,7 +546,7 @@ class TestChatCompletions:
         return message.content or getattr(message, "reasoning_content", "") or ""
 
     def test_chat_completion(self, client: OpenAI, models: dict):
-        """Non-streaming chat completion."""
+        """Non-streaming chat completion (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -550,6 +554,7 @@ class TestChatCompletions:
             model=llm_model,
             messages=[{"role": "user", "content": "Say hello in exactly 5 words."}],
             max_tokens=512,
+            extra_body=NO_THINK,
         )
         _save(
             "chat_completion.json",
@@ -560,8 +565,27 @@ class TestChatCompletions:
         assert resp.usage is not None
         assert resp.usage.total_tokens > 0
 
+    def test_chat_completion_thinking(self, client: OpenAI, models: dict):
+        """Non-streaming chat completion with thinking enabled."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        llm_model = models["llm"][0]
+        resp = client.chat.completions.create(
+            model=llm_model,
+            messages=[{"role": "user", "content": "What is 2+2?"}],
+            max_tokens=512,
+        )
+        _save(
+            "chat_completion_thinking.json",
+            json.dumps(resp.model_dump(), indent=2, default=str),
+        )
+        text = self._get_message_text(resp.choices[0].message)
+        assert len(text) > 0, "No content or reasoning_content in response"
+        assert resp.usage is not None
+        assert resp.usage.total_tokens > 0
+
     def test_chat_completion_stream(self, client: OpenAI, models: dict):
-        """Streaming chat completion collects all chunks."""
+        """Streaming chat completion collects all chunks (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -570,6 +594,7 @@ class TestChatCompletions:
             messages=[{"role": "user", "content": "Count from 1 to 5."}],
             max_tokens=512,
             stream=True,
+            extra_body=NO_THINK,
         )
         chunks = []
         full_text = ""
@@ -592,7 +617,7 @@ class TestChatCompletions:
         )
 
     def test_chat_completion_system_message(self, client: OpenAI, models: dict):
-        """Chat with system message."""
+        """Chat with system message (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -603,6 +628,7 @@ class TestChatCompletions:
                 {"role": "user", "content": "Hello!"},
             ],
             max_tokens=512,
+            extra_body=NO_THINK,
         )
         _save(
             "chat_system_msg.json",
@@ -612,7 +638,7 @@ class TestChatCompletions:
         assert len(text) > 0, "No content or reasoning_content in response"
 
     def test_chat_completion_multi_turn(self, client: OpenAI, models: dict):
-        """Multi-turn conversation."""
+        """Multi-turn conversation (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -624,6 +650,7 @@ class TestChatCompletions:
                 {"role": "user", "content": "What is my name?"},
             ],
             max_tokens=512,
+            extra_body=NO_THINK,
         )
         _save(
             "chat_multi_turn.json",
@@ -643,6 +670,7 @@ class TestCompletions:
             model=llm_model,
             prompt="The capital of France is",
             max_tokens=20,
+            extra_body=NO_THINK,
         )
         _save(
             "completion.json",
@@ -661,6 +689,7 @@ class TestCompletions:
             prompt="Once upon a time",
             max_tokens=50,
             stream=True,
+            extra_body=NO_THINK,
         )
         chunks = []
         full_text = ""
@@ -677,7 +706,7 @@ class TestCompletions:
 
 class TestResponses:
     def test_response_non_streaming(self, models: dict, raw_client: httpx.Client):
-        """Non-streaming response returns structured output."""
+        """Non-streaming response returns structured output (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -687,6 +716,7 @@ class TestResponses:
                 "model": llm_model,
                 "input": "Say hello in one word.",
                 "max_output_tokens": 512,
+                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -705,7 +735,7 @@ class TestResponses:
         )
 
     def test_response_streaming(self, models: dict, raw_client: httpx.Client):
-        """Streaming response returns SSE events."""
+        """Streaming response returns SSE events (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -716,6 +746,7 @@ class TestResponses:
                 "input": "Say hello in one word.",
                 "max_output_tokens": 512,
                 "stream": True,
+                "chat_template_kwargs": {"enable_thinking": False},
             },
             headers={"Accept": "text/event-stream"},
         )
@@ -745,7 +776,7 @@ class TestResponses:
         assert has_content, f"No content delta events found in: {events}"
 
     def test_response_with_instructions(self, models: dict, raw_client: httpx.Client):
-        """Response with system-level instructions."""
+        """Response with system-level instructions (thinking disabled)."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         llm_model = models["llm"][0]
@@ -756,6 +787,7 @@ class TestResponses:
                 "instructions": "You are a pirate. Always say Arrr!",
                 "input": "Hello!",
                 "max_output_tokens": 512,
+                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -864,6 +896,7 @@ class TestChatAudio:
                 "stream": True,
                 "modalities": ["text", "audio"],
                 "audio": {"voice": "default", "model": tts_model},
+                "chat_template_kwargs": {"enable_thinking": False},
             },
             # Don't follow the streaming auto-read; read raw
             headers={"Accept": "text/event-stream"},
