@@ -4,7 +4,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 from gateway_service.models import CompletionRequest, CompletionResponse
 
@@ -33,15 +32,13 @@ def _get_completions_client(request: Request) -> Completions:
 async def completions(
     request: Request,
     body: CompletionRequest,
-) -> JSONResponse | StreamingResponse:
+) -> CompletionResponse | StreamingResponse:
     client = _get_completions_client(request)
-    payload = body.model_dump(exclude_unset=True)
 
     try:
         if body.stream:
-            return await client.completions_stream(payload)
-        result = await client.completions(payload)
-        return JSONResponse(content=result)
+            return await client.completions_stream(body)
+        return await client.completions(body)
     except HTTPException:
         raise
     except Exception as exc:

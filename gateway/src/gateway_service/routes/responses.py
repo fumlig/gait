@@ -4,7 +4,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 from gateway_service.models import CreateResponseRequest, CreateResponseResponse
 
@@ -33,15 +32,13 @@ def _get_responses_client(request: Request) -> Responses:
 async def create_response(
     request: Request,
     body: CreateResponseRequest,
-) -> JSONResponse | StreamingResponse:
+) -> CreateResponseResponse | StreamingResponse:
     client = _get_responses_client(request)
-    payload = body.model_dump(exclude_unset=True)
 
     try:
         if body.stream:
-            return await client.create_response_stream(payload)
-        result = await client.create_response(payload)
-        return JSONResponse(content=result)
+            return await client.create_response_stream(body)
+        return await client.create_response(body)
     except HTTPException:
         raise
     except Exception as exc:

@@ -13,31 +13,63 @@ if TYPE_CHECKING:
     import httpx
     from starlette.responses import StreamingResponse
 
-    from gateway_service.models import SpeechRequest, TranscriptionResult, Voice
+    from gateway_service.models import (
+        ChatCompletionRequest,
+        ChatCompletionResponse,
+        CompletionRequest,
+        CompletionResponse,
+        CreateResponseRequest,
+        CreateResponseResponse,
+        EmbeddingRequest,
+        EmbeddingResponse,
+        SpeechRequest,
+        TranscriptionResult,
+        Voice,
+    )
 
 
 @runtime_checkable
 class ChatCompletions(Protocol):
-    async def chat_completions(self, body: dict[str, Any]) -> dict[str, Any]: ...
-    async def chat_completions_stream(self, body: dict[str, Any]) -> StreamingResponse: ...
-    async def chat_completions_stream_raw(self, body: dict[str, Any]) -> httpx.Response: ...
+    async def chat_completions(
+        self, body: ChatCompletionRequest,
+    ) -> ChatCompletionResponse: ...
+
+    async def chat_completions_stream(
+        self, body: ChatCompletionRequest,
+    ) -> StreamingResponse: ...
+
+    async def chat_completions_stream_raw(
+        self, body: ChatCompletionRequest,
+    ) -> httpx.Response: ...
 
 
 @runtime_checkable
 class Completions(Protocol):
-    async def completions(self, body: dict[str, Any]) -> dict[str, Any]: ...
-    async def completions_stream(self, body: dict[str, Any]) -> StreamingResponse: ...
+    async def completions(
+        self, body: CompletionRequest,
+    ) -> CompletionResponse: ...
+
+    async def completions_stream(
+        self, body: CompletionRequest,
+    ) -> StreamingResponse: ...
 
 
 @runtime_checkable
 class Responses(Protocol):
-    async def create_response(self, body: dict[str, Any]) -> dict[str, Any]: ...
-    async def create_response_stream(self, body: dict[str, Any]) -> StreamingResponse: ...
+    async def create_response(
+        self, body: CreateResponseRequest,
+    ) -> CreateResponseResponse: ...
+
+    async def create_response_stream(
+        self, body: CreateResponseRequest,
+    ) -> StreamingResponse: ...
 
 
 @runtime_checkable
 class Embeddings(Protocol):
-    async def embeddings(self, body: dict[str, Any]) -> dict[str, Any]: ...
+    async def embeddings(
+        self, body: EmbeddingRequest,
+    ) -> EmbeddingResponse: ...
 
 
 @runtime_checkable

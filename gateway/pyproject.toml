@@ -18,6 +18,7 @@ dev = [
     "pytest>=8",
     "pytest-asyncio>=0.25",
     "pytest-httpx>=0.35",
+    "openai>=1.60",
 ]
 
 [build-system]

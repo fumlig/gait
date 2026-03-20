@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from gateway_service.formatting import wav_to_pcm16
@@ -131,7 +130,7 @@ async def _synth_and_emit(
 async def chat_completions(
     request: Request,
     body: ChatCompletionRequest,
-) -> JSONResponse | StreamingResponse:
+) -> ChatCompletionResponse | StreamingResponse:
     client = _get_chat_client(request)
 
     wants_audio = body.modalities is not None and "audio" in body.modalities
@@ -144,12 +143,10 @@ async def chat_completions(
             )
         return await _chat_with_audio(request, client, body)
 
-    payload = body.model_dump(exclude_unset=True)
     try:
         if body.stream:
-            return await client.chat_completions_stream(payload)
-        result = await client.chat_completions(payload)
-        return JSONResponse(content=result)
+            return await client.chat_completions_stream(body)
+        return await client.chat_completions(body)
     except HTTPException:
         raise
     except Exception as exc:
@@ -169,8 +166,12 @@ async def _chat_with_audio(
     voice = audio_cfg.voice
     tts_model = audio_cfg.model or _find_tts_model(request)
 
-    # Build LLM payload without audio-specific fields
-    llm_body = body.model_dump(exclude_unset=True, exclude={"modalities", "audio"})
+    # Build LLM request without audio-specific fields
+    from gateway_service.models import ChatCompletionRequest as _Req
+
+    llm_body = _Req.model_validate(
+        body.model_dump(exclude_unset=True, exclude={"modalities", "audio"}),
+    )
 
     try:
         llm_resp = await chat_client.chat_completions_stream_raw(llm_body)

@@ -4,7 +4,6 @@ import logging
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import JSONResponse
 
 from gateway_service.models import EmbeddingRequest, EmbeddingResponse
 
@@ -31,13 +30,11 @@ def _get_embeddings_client(request: Request) -> Embeddings:
 async def embeddings(
     request: Request,
     body: EmbeddingRequest,
-) -> JSONResponse:
+) -> EmbeddingResponse:
     client = _get_embeddings_client(request)
-    payload = body.model_dump(exclude_unset=True)
 
     try:
-        result = await client.embeddings(payload)
-        return JSONResponse(content=result)
+        return await client.embeddings(body)
     except HTTPException:
         raise
     except Exception as exc:

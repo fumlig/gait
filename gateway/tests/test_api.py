@@ -10,6 +10,10 @@ import pytest
 from httpx import ASGITransport, AsyncClient
 
 from gateway_service.models import (
+    ChatCompletionResponse,
+    CompletionResponse,
+    CreateResponseResponse,
+    EmbeddingResponse,
     ModelObject,
     RawSegment,
     TranscriptionResult,
@@ -158,7 +162,7 @@ def _make_transcription_client(
     return client
 
 
-MOCK_CHAT_COMPLETION = {
+MOCK_CHAT_COMPLETION = ChatCompletionResponse.model_validate({
     "id": "chatcmpl-123",
     "object": "chat.completion",
     "created": 1700000000,
@@ -171,9 +175,9 @@ MOCK_CHAT_COMPLETION = {
         }
     ],
     "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
-}
+})
 
-MOCK_TOOL_CALL_RESPONSE = {
+MOCK_TOOL_CALL_RESPONSE = ChatCompletionResponse.model_validate({
     "id": "chatcmpl-tool-1",
     "object": "chat.completion",
     "created": 1700000000,
@@ -199,9 +203,9 @@ MOCK_TOOL_CALL_RESPONSE = {
         }
     ],
     "usage": {"prompt_tokens": 50, "completion_tokens": 30, "total_tokens": 80},
-}
+})
 
-MOCK_PARALLEL_TOOL_CALL_RESPONSE = {
+MOCK_PARALLEL_TOOL_CALL_RESPONSE = ChatCompletionResponse.model_validate({
     "id": "chatcmpl-tool-2",
     "object": "chat.completion",
     "created": 1700000000,
@@ -235,9 +239,9 @@ MOCK_PARALLEL_TOOL_CALL_RESPONSE = {
         }
     ],
     "usage": {"prompt_tokens": 60, "completion_tokens": 50, "total_tokens": 110},
-}
+})
 
-MOCK_COMPLETION = {
+MOCK_COMPLETION = CompletionResponse.model_validate({
     "id": "cmpl-123",
     "object": "text_completion",
     "created": 1700000000,
@@ -250,9 +254,9 @@ MOCK_COMPLETION = {
         }
     ],
     "usage": {"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
-}
+})
 
-MOCK_RESPONSE = {
+MOCK_RESPONSE = CreateResponseResponse.model_validate({
     "id": "resp-123",
     "object": "response",
     "created_at": 1700000000,
@@ -267,9 +271,9 @@ MOCK_RESPONSE = {
     ],
     "status": "completed",
     "usage": {"input_tokens": 10, "output_tokens": 8, "total_tokens": 18},
-}
+})
 
-MOCK_RESPONSE_WITH_TOOL_CALLS = {
+MOCK_RESPONSE_WITH_TOOL_CALLS = CreateResponseResponse.model_validate({
     "id": "resp-tool-1",
     "object": "response",
     "created_at": 1700000000,
@@ -285,9 +289,9 @@ MOCK_RESPONSE_WITH_TOOL_CALLS = {
     ],
     "status": "completed",
     "usage": {"input_tokens": 50, "output_tokens": 25, "total_tokens": 75},
-}
+})
 
-MOCK_EMBEDDINGS = {
+MOCK_EMBEDDINGS = EmbeddingResponse.model_validate({
     "object": "list",
     "data": [
         {
@@ -298,7 +302,7 @@ MOCK_EMBEDDINGS = {
     ],
     "model": "my-model",
     "usage": {"prompt_tokens": 5, "total_tokens": 5},
-}
+})
 
 
 def _make_chat_client() -> AsyncMock:
@@ -907,9 +911,11 @@ async def test_chat_completions(client: AsyncClient, chat_client: AsyncMock):
     data = resp.json()
     assert data["object"] == "chat.completion"
     assert data["choices"][0]["message"]["content"] == "Hello! How can I help you?"
-    chat_client.chat_completions.assert_called_once_with(
-        {"model": "my-model", "messages": [{"role": "user", "content": "Hello"}]},
-    )
+    chat_client.chat_completions.assert_called_once()
+    req = chat_client.chat_completions.call_args[0][0]
+    assert req.model == "my-model"
+    assert req.messages[0].role == "user"
+    assert req.messages[0].content == "Hello"
 
 
 async def test_chat_completions_stream(client: AsyncClient, chat_client: AsyncMock):
@@ -925,9 +931,10 @@ async def test_chat_completions_stream(client: AsyncClient, chat_client: AsyncMo
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
     assert "data:" in resp.text
-    chat_client.chat_completions_stream.assert_called_once_with(
-        {"model": "my-model", "messages": [{"role": "user", "content": "Hello"}], "stream": True},
-    )
+    chat_client.chat_completions_stream.assert_called_once()
+    req = chat_client.chat_completions_stream.call_args[0][0]
+    assert req.model == "my-model"
+    assert req.stream is True
 
 
 async def test_chat_completions_backend_unavailable(
@@ -1001,9 +1008,9 @@ async def test_chat_completions_with_tools(client: AsyncClient, chat_client: Asy
 
     # Verify the request was forwarded with tools
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert len(call_args["tools"]) == 1
-    assert call_args["tools"][0]["function"]["name"] == "get_weather"
-    assert call_args["tool_choice"] == "auto"
+    assert len(call_args.tools) == 1
+    assert call_args.tools[0].function.name == "get_weather"
+    assert call_args.tool_choice == "auto"
 
 
 async def test_chat_completions_tool_results(client: AsyncClient, chat_client: AsyncMock):
@@ -1041,15 +1048,15 @@ async def test_chat_completions_tool_results(client: AsyncClient, chat_client: A
 
     # Verify all messages were forwarded correctly
     call_args = chat_client.chat_completions.call_args[0][0]
-    messages = call_args["messages"]
+    messages = call_args.messages
     assert len(messages) == 3
-    assert messages[0]["role"] == "user"
-    assert messages[1]["role"] == "assistant"
-    assert messages[1]["content"] is None
-    assert len(messages[1]["tool_calls"]) == 1
-    assert messages[1]["tool_calls"][0]["id"] == "call_abc123"
-    assert messages[2]["role"] == "tool"
-    assert messages[2]["tool_call_id"] == "call_abc123"
+    assert messages[0].role == "user"
+    assert messages[1].role == "assistant"
+    assert messages[1].content is None
+    assert len(messages[1].tool_calls) == 1
+    assert messages[1].tool_calls[0].id == "call_abc123"
+    assert messages[2].role == "tool"
+    assert messages[2].tool_call_id == "call_abc123"
 
 
 async def test_chat_completions_parallel_tool_calls(
@@ -1092,7 +1099,7 @@ async def test_chat_completions_parallel_tool_calls(
 
     # Verify parallel_tool_calls was forwarded
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["parallel_tool_calls"] is True
+    assert call_args.parallel_tool_calls is True
 
 
 async def test_chat_completions_tool_choice_forced(
@@ -1125,8 +1132,8 @@ async def test_chat_completions_tool_choice_forced(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["tool_choice"]["type"] == "function"
-    assert call_args["tool_choice"]["function"]["name"] == "get_weather"
+    assert call_args.tool_choice["type"] == "function"
+    assert call_args.tool_choice["function"]["name"] == "get_weather"
 
 
 async def test_chat_completions_tool_choice_none(
@@ -1154,7 +1161,7 @@ async def test_chat_completions_tool_choice_none(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["tool_choice"] == "none"
+    assert call_args.tool_choice == "none"
 
 
 async def test_chat_completions_streaming_tool_calls(
@@ -1237,8 +1244,11 @@ async def test_chat_completions_streaming_tool_calls(
 
 async def test_chat_completions_json_mode(client: AsyncClient, chat_client: AsyncMock):
     """response_format: json_object is forwarded to the backend."""
-    chat_client.chat_completions.return_value = {
-        **MOCK_CHAT_COMPLETION,
+    chat_client.chat_completions.return_value = ChatCompletionResponse.model_validate({
+        "id": "chatcmpl-json",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "my-model",
         "choices": [
             {
                 "index": 0,
@@ -1246,7 +1256,7 @@ async def test_chat_completions_json_mode(client: AsyncClient, chat_client: Asyn
                 "finish_reason": "stop",
             }
         ],
-    }
+    })
 
     resp = await client.post(
         "/v1/chat/completions",
@@ -1259,7 +1269,7 @@ async def test_chat_completions_json_mode(client: AsyncClient, chat_client: Asyn
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["response_format"]["type"] == "json_object"
+    assert call_args.response_format.type == "json_object"
 
 
 async def test_chat_completions_json_schema(client: AsyncClient, chat_client: AsyncMock):
@@ -1288,8 +1298,8 @@ async def test_chat_completions_json_schema(client: AsyncClient, chat_client: As
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["response_format"]["type"] == "json_schema"
-    assert call_args["response_format"]["json_schema"]["name"] == "weather_response"
+    assert call_args.response_format.type == "json_schema"
+    assert call_args.response_format.json_schema["name"] == "weather_response"
 
 
 # ===================================================================
@@ -1323,18 +1333,18 @@ async def test_chat_completions_sampling_params(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["temperature"] == 0.7
-    assert call_args["top_p"] == 0.9
-    assert call_args["max_tokens"] == 100
-    assert call_args["max_completion_tokens"] == 200
-    assert call_args["presence_penalty"] == 0.5
-    assert call_args["frequency_penalty"] == 0.3
-    assert call_args["seed"] == 42
-    assert call_args["n"] == 2
-    assert call_args["stop"] == ["\n", "END"]
-    assert call_args["logprobs"] is True
-    assert call_args["top_logprobs"] == 5
-    assert call_args["user"] == "test-user"
+    assert call_args.temperature == 0.7
+    assert call_args.top_p == 0.9
+    assert call_args.max_tokens == 100
+    assert call_args.max_completion_tokens == 200
+    assert call_args.presence_penalty == 0.5
+    assert call_args.frequency_penalty == 0.3
+    assert call_args.seed == 42
+    assert call_args.n == 2
+    assert call_args.stop == ["\n", "END"]
+    assert call_args.logprobs is True
+    assert call_args.top_logprobs == 5
+    assert call_args.user == "test-user"
 
 
 async def test_chat_completions_stream_options(
@@ -1353,7 +1363,7 @@ async def test_chat_completions_stream_options(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions_stream.call_args[0][0]
-    assert call_args["stream_options"]["include_usage"] is True
+    assert call_args.stream_options.include_usage is True
 
 
 async def test_chat_completions_logit_bias(client: AsyncClient, chat_client: AsyncMock):
@@ -1369,7 +1379,7 @@ async def test_chat_completions_logit_bias(client: AsyncClient, chat_client: Asy
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["logit_bias"] == {"50256": -100.0, "1": 5.0}
+    assert call_args.logit_bias == {"50256": -100.0, "1": 5.0}
 
 
 # ===================================================================
@@ -1394,8 +1404,8 @@ async def test_chat_completions_system_message(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["messages"][0]["role"] == "system"
-    assert call_args["messages"][0]["content"] == "You are a helpful assistant."
+    assert call_args.messages[0].role == "system"
+    assert call_args.messages[0].content == "You are a helpful assistant."
 
 
 async def test_chat_completions_multimodal_content(
@@ -1423,7 +1433,7 @@ async def test_chat_completions_multimodal_content(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    content = call_args["messages"][0]["content"]
+    content = call_args.messages[0].content
     assert isinstance(content, list)
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
@@ -1445,7 +1455,7 @@ async def test_chat_completions_message_name(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["messages"][0]["name"] == "Alice"
+    assert call_args.messages[0].name == "Alice"
 
 
 # ===================================================================
@@ -1469,8 +1479,8 @@ async def test_chat_completions_extra_fields(
 
     assert resp.status_code == 200
     call_args = chat_client.chat_completions.call_args[0][0]
-    assert call_args["custom_field"] == "custom_value"
-    assert call_args["another_extension"] == 42
+    assert call_args.custom_field == "custom_value"
+    assert call_args.another_extension == 42
 
 
 # ===================================================================
@@ -1742,9 +1752,10 @@ async def test_text_completions(client: AsyncClient, chat_client: AsyncMock):
     data = resp.json()
     assert data["object"] == "text_completion"
     assert data["choices"][0]["text"] == "Hello world"
-    chat_client.completions.assert_called_once_with(
-        {"model": "my-model", "prompt": "Hello"},
-    )
+    chat_client.completions.assert_called_once()
+    req = chat_client.completions.call_args[0][0]
+    assert req.model == "my-model"
+    assert req.prompt == "Hello"
 
 
 async def test_text_completions_stream(client: AsyncClient, chat_client: AsyncMock):
@@ -1797,19 +1808,19 @@ async def test_text_completions_sampling_params(
 
     assert resp.status_code == 200
     call_args = chat_client.completions.call_args[0][0]
-    assert call_args["temperature"] == 0.8
-    assert call_args["top_p"] == 0.95
-    assert call_args["max_tokens"] == 50
-    assert call_args["n"] == 3
-    assert call_args["stop"] == [".", "!"]
-    assert call_args["presence_penalty"] == 0.2
-    assert call_args["frequency_penalty"] == 0.1
-    assert call_args["best_of"] == 5
-    assert call_args["echo"] is True
-    assert call_args["suffix"] == " The end."
-    assert call_args["seed"] == 123
-    assert call_args["logprobs"] == 3
-    assert call_args["user"] == "test-user"
+    assert call_args.temperature == 0.8
+    assert call_args.top_p == 0.95
+    assert call_args.max_tokens == 50
+    assert call_args.n == 3
+    assert call_args.stop == [".", "!"]
+    assert call_args.presence_penalty == 0.2
+    assert call_args.frequency_penalty == 0.1
+    assert call_args.best_of == 5
+    assert call_args.echo is True
+    assert call_args.suffix == " The end."
+    assert call_args.seed == 123
+    assert call_args.logprobs == 3
+    assert call_args.user == "test-user"
 
 
 async def test_text_completions_array_prompt(
@@ -1826,7 +1837,7 @@ async def test_text_completions_array_prompt(
 
     assert resp.status_code == 200
     call_args = chat_client.completions.call_args[0][0]
-    assert call_args["prompt"] == ["Hello", "World"]
+    assert call_args.prompt == ["Hello", "World"]
 
 
 async def test_text_completions_token_prompt(
@@ -1843,7 +1854,7 @@ async def test_text_completions_token_prompt(
 
     assert resp.status_code == 200
     call_args = chat_client.completions.call_args[0][0]
-    assert call_args["prompt"] == [1, 2, 3, 4, 5]
+    assert call_args.prompt == [1, 2, 3, 4, 5]
 
 
 async def test_text_completions_missing_model(client: AsyncClient):
@@ -1879,7 +1890,7 @@ async def test_text_completions_extra_fields(
 
     assert resp.status_code == 200
     call_args = chat_client.completions.call_args[0][0]
-    assert call_args["custom_setting"] is True
+    assert call_args.custom_setting is True
 
 
 # ===================================================================
@@ -1901,9 +1912,10 @@ async def test_responses(client: AsyncClient, chat_client: AsyncMock):
     assert data["object"] == "response"
     assert data["status"] == "completed"
     assert data["output"][0]["content"][0]["text"] == "Hello! How can I help?"
-    chat_client.create_response.assert_called_once_with(
-        {"model": "my-model", "input": "Hello"},
-    )
+    chat_client.create_response.assert_called_once()
+    req = chat_client.create_response.call_args[0][0]
+    assert req.model == "my-model"
+    assert req.input == "Hello"
 
 
 async def test_responses_stream(client: AsyncClient, chat_client: AsyncMock):
@@ -1918,9 +1930,10 @@ async def test_responses_stream(client: AsyncClient, chat_client: AsyncMock):
     )
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
-    chat_client.create_response_stream.assert_called_once_with(
-        {"model": "my-model", "input": "Hello", "stream": True},
-    )
+    chat_client.create_response_stream.assert_called_once()
+    req = chat_client.create_response_stream.call_args[0][0]
+    assert req.model == "my-model"
+    assert req.stream is True
 
 
 async def test_responses_backend_unavailable(client: AsyncClient, chat_client: AsyncMock):
@@ -1948,7 +1961,7 @@ async def test_responses_with_instructions(
 
     assert resp.status_code == 200
     call_args = chat_client.create_response.call_args[0][0]
-    assert call_args["instructions"] == "You are a pirate."
+    assert call_args.instructions == "You are a pirate."
 
 
 async def test_responses_with_tools(client: AsyncClient, chat_client: AsyncMock):
@@ -1983,8 +1996,8 @@ async def test_responses_with_tools(client: AsyncClient, chat_client: AsyncMock)
 
     # Verify tools were forwarded
     call_args = chat_client.create_response.call_args[0][0]
-    assert len(call_args["tools"]) == 1
-    assert call_args["tool_choice"] == "auto"
+    assert len(call_args.tools) == 1
+    assert call_args.tool_choice == "auto"
 
 
 async def test_responses_with_input_items(
@@ -2003,8 +2016,8 @@ async def test_responses_with_input_items(
 
     assert resp.status_code == 200
     call_args = chat_client.create_response.call_args[0][0]
-    assert isinstance(call_args["input"], list)
-    assert call_args["input"][0]["role"] == "user"
+    assert isinstance(call_args.input, list)
+    assert call_args.input[0]["role"] == "user"
 
 
 async def test_responses_sampling_params(
@@ -2024,9 +2037,9 @@ async def test_responses_sampling_params(
 
     assert resp.status_code == 200
     call_args = chat_client.create_response.call_args[0][0]
-    assert call_args["temperature"] == 0.5
-    assert call_args["top_p"] == 0.8
-    assert call_args["max_output_tokens"] == 500
+    assert call_args.temperature == 0.5
+    assert call_args.top_p == 0.8
+    assert call_args.max_output_tokens == 500
 
 
 async def test_responses_missing_model(client: AsyncClient):
@@ -2060,7 +2073,7 @@ async def test_responses_extra_fields(client: AsyncClient, chat_client: AsyncMoc
 
     assert resp.status_code == 200
     call_args = chat_client.create_response.call_args[0][0]
-    assert call_args["custom_param"] == "value"
+    assert call_args.custom_param == "value"
 
 
 # ===================================================================
@@ -2079,9 +2092,10 @@ async def test_embeddings(client: AsyncClient, chat_client: AsyncMock):
     assert data["object"] == "list"
     assert len(data["data"]) == 1
     assert data["data"][0]["embedding"] == [0.1, 0.2, 0.3]
-    chat_client.embeddings.assert_called_once_with(
-        {"model": "my-model", "input": "Hello world"},
-    )
+    chat_client.embeddings.assert_called_once()
+    req = chat_client.embeddings.call_args[0][0]
+    assert req.model == "my-model"
+    assert req.input == "Hello world"
 
 
 async def test_embeddings_backend_unavailable(client: AsyncClient, chat_client: AsyncMock):
@@ -2106,7 +2120,7 @@ async def test_embeddings_array_input(client: AsyncClient, chat_client: AsyncMoc
 
     assert resp.status_code == 200
     call_args = chat_client.embeddings.call_args[0][0]
-    assert call_args["input"] == ["Hello", "World"]
+    assert call_args.input == ["Hello", "World"]
 
 
 async def test_embeddings_encoding_format(
@@ -2124,7 +2138,7 @@ async def test_embeddings_encoding_format(
 
     assert resp.status_code == 200
     call_args = chat_client.embeddings.call_args[0][0]
-    assert call_args["encoding_format"] == "base64"
+    assert call_args.encoding_format == "base64"
 
 
 async def test_embeddings_dimensions(client: AsyncClient, chat_client: AsyncMock):
@@ -2140,7 +2154,7 @@ async def test_embeddings_dimensions(client: AsyncClient, chat_client: AsyncMock
 
     assert resp.status_code == 200
     call_args = chat_client.embeddings.call_args[0][0]
-    assert call_args["dimensions"] == 256
+    assert call_args.dimensions == 256
 
 
 async def test_embeddings_missing_model(client: AsyncClient):
@@ -2174,7 +2188,7 @@ async def test_embeddings_extra_fields(client: AsyncClient, chat_client: AsyncMo
 
     assert resp.status_code == 200
     call_args = chat_client.embeddings.call_args[0][0]
-    assert call_args["custom_option"] is True
+    assert call_args.custom_option is True
 
 
 # ===================================================================
@@ -2227,8 +2241,8 @@ async def test_no_backend_configured():
 # ===================================================================
 
 
-async def test_unset_fields_not_forwarded(client: AsyncClient, chat_client: AsyncMock):
-    """Only fields the client explicitly sends appear in the backend payload."""
+async def test_unset_fields_excluded_from_dump(client: AsyncClient, chat_client: AsyncMock):
+    """model_dump(exclude_unset=True) only includes fields the client sent."""
     resp = await client.post(
         "/v1/chat/completions",
         json={
@@ -2238,16 +2252,17 @@ async def test_unset_fields_not_forwarded(client: AsyncClient, chat_client: Asyn
     )
 
     assert resp.status_code == 200
-    call_args = chat_client.chat_completions.call_args[0][0]
-    # Fields with defaults that weren't sent should be absent
-    assert "temperature" not in call_args
-    assert "top_p" not in call_args
-    assert "tools" not in call_args
-    assert "tool_choice" not in call_args
-    assert "stream" not in call_args  # defaults to False, not sent
-    assert "stream_options" not in call_args
-    assert "response_format" not in call_args
-    assert "seed" not in call_args
+    req = chat_client.chat_completions.call_args[0][0]
+    dump = req.model_dump(exclude_unset=True)
+    # Fields with defaults that weren't sent should be absent from the dump
+    assert "temperature" not in dump
+    assert "top_p" not in dump
+    assert "tools" not in dump
+    assert "tool_choice" not in dump
+    assert "stream" not in dump  # defaults to False, not sent
+    assert "stream_options" not in dump
+    assert "response_format" not in dump
+    assert "seed" not in dump
     # But the fields the user sent should be present
-    assert "model" in call_args
-    assert "messages" in call_args
+    assert "model" in dump
+    assert "messages" in dump
