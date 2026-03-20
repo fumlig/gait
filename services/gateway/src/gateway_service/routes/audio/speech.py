@@ -11,7 +11,7 @@ from fastapi.responses import Response
 from gateway_service.models import SpeechRequest, SpeechResponseFormat
 
 if TYPE_CHECKING:
-    from gateway_service.clients.protocols import AudioSpeech
+    from gateway_service.protocols import AudioSpeech
 
 logger = logging.getLogger(__name__)
 

@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
-    from gateway_service.clients.protocols import Embeddings
+    from gateway_service.protocols import Embeddings
 
 logger = logging.getLogger(__name__)
 

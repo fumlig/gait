@@ -12,7 +12,7 @@ class Settings(BaseSettings):
 
     Backend service URLs and the voices directory are **not** listed here.
     They are discovered via each client class's ``env_var`` attribute
-    (see :pymod:`gateway_service.clients`).
+    (see :pymod:`gateway_service.backends`).
     """
 
     model_config = {"env_prefix": "", "case_sensitive": False}

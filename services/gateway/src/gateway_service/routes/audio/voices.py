@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 if TYPE_CHECKING:
-    from gateway_service.clients.protocols import AudioVoices
+    from gateway_service.protocols import AudioVoices
 
 logger = logging.getLogger(__name__)
 

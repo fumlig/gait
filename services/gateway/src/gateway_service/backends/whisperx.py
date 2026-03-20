@@ -1,7 +1,7 @@
 """WhisperX backend client — calls the whisperx STT /transcribe and /translate endpoints.
 
-Implements :class:`~gateway_service.clients.protocols.AudioTranscriptions` and
-:class:`~gateway_service.clients.protocols.AudioTranslations`.
+Implements :class:`~gateway_service.protocols.AudioTranscriptions` and
+:class:`~gateway_service.protocols.AudioTranslations`.
 """
 
 from __future__ import annotations
@@ -11,13 +11,14 @@ from typing import ClassVar
 
 from fastapi import HTTPException
 
-from gateway_service.clients.base import BaseBackend
+from gateway_service.backends.base import BaseBackend
 from gateway_service.models import RawSegment, TranscriptionResult, WordTimestamp
+from gateway_service.protocols import AudioTranscriptions, AudioTranslations
 
 logger = logging.getLogger(__name__)
 
 
-class WhisperxClient(BaseBackend):
+class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
     """Typed HTTP client for the whisperx transcription (STT) backend.
 
     Calls whisperx's RPC endpoints:
@@ -90,14 +91,9 @@ class WhisperxClient(BaseBackend):
         word_timestamps: bool = False,
         diarize: bool = False,
     ) -> TranscriptionResult:
-        """Send a multipart form request to the backend STT service.
-
-        The backend returns raw JSON (text, language, duration, segments).
-        We parse it into a ``TranscriptionResult``.
-        """
+        """Send a multipart form request to the backend STT service."""
         url = f"{self._base_url}{endpoint}"
 
-        # Build multipart form fields.
         data: dict[str, str] = {
             "model": model,
             "temperature": str(temperature),

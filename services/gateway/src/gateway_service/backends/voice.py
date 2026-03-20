@@ -1,5 +1,7 @@
 """Voice client — manages WAV reference clips on a local directory.
 
+Implements :class:`~gateway_service.protocols.AudioVoices`.
+
 All file operations happen directly on the filesystem (the voices
 directory is shared with the chatterbox container via a Docker volume).
 """
@@ -9,10 +11,17 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from fastapi import HTTPException
 
 from gateway_service.models import Voice
+from gateway_service.protocols import AudioVoices
+
+if TYPE_CHECKING:
+    from typing import Self
+
+    import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -23,19 +32,27 @@ _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _DEFAULT_VOICE = "default"
 
 
-class VoiceClient:
+class VoiceClient(AudioVoices):
     """Manages voice reference clips on a local directory.
 
-    Discovered via the ``VOICES_DIR`` environment variable.  Unlike the
-    HTTP backend clients this operates on the local filesystem, but it
-    follows the same ``env_var``-based registration pattern.
+    Follows the same ``env_var`` / ``create`` registration pattern as
+    the HTTP backends so it can appear in ``KNOWN_BACKENDS``.
     """
 
+    name = "voices"
     env_var = "VOICES_DIR"
-    """Environment variable that holds the voices directory path."""
 
     def __init__(self, voices_dir: str | Path) -> None:
         self._voices_dir = Path(voices_dir)
+
+    @classmethod
+    def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Self:
+        """Instantiate from the ``VOICES_DIR`` env var value.
+
+        The *http_client* argument is accepted for interface
+        compatibility but is not used.
+        """
+        return cls(voices_dir=env_value)
 
     def _list_voice_names(self) -> list[str]:
         d = self._voices_dir

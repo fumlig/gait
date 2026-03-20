@@ -1,8 +1,9 @@
 """Base class for HTTP backend service clients.
 
-Provides shared model discovery and health checking.  Concrete clients
-extend this class and implement one or more resource protocols from
-:pymod:`gateway_service.clients.protocols`.
+Provides shared model discovery, health checking, and a factory
+``create`` classmethod for uniform instantiation from environment
+variables.  Concrete clients extend this class and implement one or
+more resource protocols from :pymod:`gateway_service.protocols`.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from typing import TYPE_CHECKING, ClassVar
 from gateway_service.models import ModelObject
 
 if TYPE_CHECKING:
+    from typing import Self
+
     import httpx
 
 logger = logging.getLogger(__name__)
@@ -26,7 +29,7 @@ class BaseBackend:
     backend uses a non-standard path (e.g. ``/v1/models``).
 
     Which resource protocols a client implements determines which
-    ``app.state`` slots it fills — see :pymod:`~gateway_service.clients.protocols`.
+    ``app.state`` slots it fills — see :pymod:`gateway_service.protocols`.
     """
 
     name: str
@@ -44,6 +47,11 @@ class BaseBackend:
     def __init__(self, *, base_url: str, http_client: httpx.AsyncClient) -> None:
         self._base_url = base_url.rstrip("/")
         self._http_client = http_client
+
+    @classmethod
+    def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Self:
+        """Instantiate from an environment variable value."""
+        return cls(base_url=env_value, http_client=http_client)
 
     @property
     def base_url(self) -> str:

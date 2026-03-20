@@ -13,9 +13,10 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from gateway_service.clients import KNOWN_BACKENDS, PROTOCOL_SLOTS
-from gateway_service.clients.voice import VoiceClient
+from gateway_service.backends import KNOWN_BACKENDS
+from gateway_service.backends.base import BaseBackend
 from gateway_service.config import settings
+from gateway_service.protocols import PROTOCOL_SLOTS
 from gateway_service.routes import completions, embeddings, health, models, responses
 from gateway_service.routes.audio import router as audio_router
 from gateway_service.routes.chat import router as chat_router
@@ -23,7 +24,6 @@ from gateway_service.routes.chat import router as chat_router
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from gateway_service.clients.base import BaseBackend
     from gateway_service.models import ModelObject
 
 logging.basicConfig(
@@ -34,7 +34,7 @@ logger = logging.getLogger(__name__)
 
 
 async def fetch_all_models(application: FastAPI) -> list[ModelObject]:
-    """Fetch models from all backends and merge (with deduplication)."""
+    """Fetch models from all HTTP backends and merge (with deduplication)."""
     backends: list[BaseBackend] = getattr(application.state, "backends", [])
 
     all_model_lists = await asyncio.gather(
@@ -65,28 +65,22 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     application.state._http_client = http_client
 
     # ------------------------------------------------------------------
-    # Discover and instantiate backend clients
+    # Instantiate all backends whose env var is set
     # ------------------------------------------------------------------
+    all_clients: list[object] = []
     backends: list[BaseBackend] = []
 
     for cls in KNOWN_BACKENDS:
-        url = os.environ.get(cls.env_var)
-        if url:
-            backend = cls(base_url=url, http_client=http_client)
-            backends.append(backend)
-            logger.info("Registered backend: %s → %s", cls.name, url)
+        value = os.environ.get(cls.env_var)
+        if not value:
+            continue
+        client = cls.create(value, http_client)
+        all_clients.append(client)
+        if isinstance(client, BaseBackend):
+            backends.append(client)
+        logger.info("Registered backend: %s → %s", cls.name, value)
 
     application.state.backends = backends
-
-    # ------------------------------------------------------------------
-    # Collect all clients (HTTP backends + local clients) for wiring
-    # ------------------------------------------------------------------
-    all_clients: list[object] = list(backends)
-
-    voices_dir = os.environ.get(VoiceClient.env_var)
-    if voices_dir:
-        all_clients.append(VoiceClient(voices_dir=voices_dir))
-        logger.info("Voice management enabled: %s", voices_dir)
 
     # ------------------------------------------------------------------
     # Wire resource protocols → app.state slots via isinstance checks

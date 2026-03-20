@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request
 from gateway_service.models import GatewayHealthResponse
 
 if TYPE_CHECKING:
-    from gateway_service.clients.base import BaseBackend
+    from gateway_service.backends.base import BaseBackend
 
 logger = logging.getLogger(__name__)
 

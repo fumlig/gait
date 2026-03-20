@@ -1,9 +1,9 @@
 """Llama.cpp backend client — transparent proxy to the llama.cpp server.
 
-Implements :class:`~gateway_service.clients.protocols.ChatCompletions`,
-:class:`~gateway_service.clients.protocols.Completions`,
-:class:`~gateway_service.clients.protocols.Responses`, and
-:class:`~gateway_service.clients.protocols.Embeddings`.
+Implements :class:`~gateway_service.protocols.ChatCompletions`,
+:class:`~gateway_service.protocols.Completions`,
+:class:`~gateway_service.protocols.Responses`, and
+:class:`~gateway_service.protocols.Embeddings`.
 """
 
 from __future__ import annotations
@@ -14,7 +14,8 @@ from typing import TYPE_CHECKING, ClassVar
 from fastapi import HTTPException
 from starlette.responses import StreamingResponse
 
-from gateway_service.clients.base import BaseBackend
+from gateway_service.backends.base import BaseBackend
+from gateway_service.protocols import ChatCompletions, Completions, Embeddings, Responses
 
 if TYPE_CHECKING:
     import httpx
@@ -22,7 +23,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class LlamacppClient(BaseBackend):
+class LlamacppClient(BaseBackend, ChatCompletions, Completions, Responses, Embeddings):
     """Typed HTTP client for the llama.cpp server backend.
 
     Since llama-server is already OpenAI-compatible, this client acts as a

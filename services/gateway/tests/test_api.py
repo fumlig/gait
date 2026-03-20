@@ -16,7 +16,7 @@ from unittest.mock import AsyncMock
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from gateway_service.clients.voice import VoiceClient
+from gateway_service.backends.voice import VoiceClient
 from gateway_service.models import (
     ModelObject,
     RawSegment,

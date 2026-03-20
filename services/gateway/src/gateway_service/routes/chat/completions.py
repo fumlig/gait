@@ -23,7 +23,7 @@ from gateway_service.formatting import wav_to_pcm16
 from gateway_service.models import SpeechRequest, SpeechResponseFormat
 
 if TYPE_CHECKING:
-    from gateway_service.clients.protocols import AudioSpeech, ChatCompletions
+    from gateway_service.protocols import AudioSpeech, ChatCompletions
 
 logger = logging.getLogger(__name__)
 

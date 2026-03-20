@@ -13,7 +13,7 @@ from gateway_service.models import TranscriptionResponseFormat
 if TYPE_CHECKING:
     from starlette.responses import Response
 
-    from gateway_service.clients.protocols import AudioTranslations
+    from gateway_service.protocols import AudioTranslations
 
 logger = logging.getLogger(__name__)
 

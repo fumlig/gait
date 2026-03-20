@@ -1,6 +1,6 @@
 """Chatterbox backend client — calls the chatterbox TTS /synthesize endpoint.
 
-Implements :class:`~gateway_service.clients.protocols.AudioSpeech`.
+Implements :class:`~gateway_service.protocols.AudioSpeech`.
 """
 
 from __future__ import annotations
@@ -10,7 +10,8 @@ from typing import TYPE_CHECKING, ClassVar
 
 from fastapi import HTTPException
 
-from gateway_service.clients.base import BaseBackend
+from gateway_service.backends.base import BaseBackend
+from gateway_service.protocols import AudioSpeech
 
 if TYPE_CHECKING:
     from gateway_service.models import SpeechRequest
@@ -18,7 +19,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ChatterboxClient(BaseBackend):
+class ChatterboxClient(BaseBackend, AudioSpeech):
     """Typed HTTP client for the chatterbox speech (TTS) backend.
 
     Calls chatterbox's RPC endpoints:

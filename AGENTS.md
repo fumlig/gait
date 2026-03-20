@@ -32,7 +32,7 @@ Trave exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway
 - **Gateway** owns the OpenAI API contract: request/response schemas, format conversion (WAV→MP3, segments→SRT/VTT), model list caching. Also handles voice management directly on a local directory (shared volume with chatterbox).
 - **llamacpp** runs the upstream llama.cpp server image directly. Already OpenAI-compatible — the gateway proxies requests transparently. No custom application code.
 - **Backends** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no trave-common.
-- **Clients** live in the gateway's `clients/` module. Each backend client implements the `Backend` protocol and declares its capabilities. The gateway auto-discovers which clients to instantiate based on environment variables (`LLAMACPP_URL`, `CHATTERBOX_URL`, `WHISPERX_URL`). The voice client operates on the local filesystem via `VOICES_DIR`.
+- **Clients** live in the gateway's `backends/` module. Each backend client extends `BaseBackend` (for HTTP backends) and implements resource protocols from `protocols.py`. The gateway auto-discovers which clients to instantiate based on environment variables (`LLAMACPP_URL`, `CHATTERBOX_URL`, `WHISPERX_URL`, `VOICES_DIR`).
 
 ## Repository structure
 
@@ -48,9 +48,10 @@ trave/
         config.py              # pydantic-settings
         models.py              # shared response schemas
         formatting.py          # response format conversion
-        clients/
-          base.py              # Backend protocol + BaseBackend base class
-          __init__.py          # KNOWN_BACKENDS registry
+        protocols.py           # Resource protocols (ChatCompletions, AudioSpeech, etc.)
+        backends/
+          base.py              # BaseBackend base class (health, models, create)
+          __init__.py          # KNOWN_BACKENDS registry, Registerable protocol
           llamacpp.py          # LlamacppClient — transparent proxy for llama.cpp
           chatterbox.py        # ChatterboxClient — TTS via chatterbox
           whisperx.py          # WhisperxClient — STT via whisperx
@@ -107,17 +108,16 @@ trave/
 
 ### Gateway
 - FastAPI app. Owns all OpenAI API contract concerns.
-- `clients/` module contains typed HTTP wrappers, one per backend type.
-- All backend clients implement the `Backend` protocol (defined in `clients/base.py`): `name`, `base_url`, `capabilities`, `fetch_models()`, `check_health()`. A `BaseBackend` base class provides the shared implementation.
-- Each client class declares an `env_var` attribute (e.g. `CHATTERBOX_URL`). At startup the gateway iterates `KNOWN_BACKENDS`, checks `os.environ` for each class's env var, and instantiates only those whose variable is set.
-- Clients report their capabilities (e.g. `["speech"]`, `["chat"]`). The gateway wires each capability to `app.state.<cap>_client` so routes can look up clients by capability.
-- Voice management uses a local `VOICES_DIR` env var (handled by `VoiceClient`).
+- `backends/` module contains typed client classes, one per backend type. `protocols.py` defines resource protocols (one per OpenAI endpoint group).
+- HTTP backends extend `BaseBackend` (shared health/models) and implement resource protocols (e.g. `AudioSpeech`, `ChatCompletions`). The `VoiceClient` implements `AudioVoices` directly.
+- Each class declares `env_var` and a `create` classmethod. At startup the gateway iterates `KNOWN_BACKENDS`, checks `os.environ` for each class's env var, and calls `create` to instantiate only those whose variable is set.
+- Protocol wiring is automatic: the gateway uses `isinstance` checks against each resource protocol to determine which `app.state` slot a client fills. No explicit capabilities list needed.
 - Route modules mirror OpenAI API resource grouping: `chat/`, `completions`, `responses`, `embeddings`, `audio/`.
 - Models are fetched from each backend's `fetch_models()` at startup and cached on `app.state.models`.
 - Format conversion (WAV→MP3, segments→SRT/VTT) happens in the gateway.
 
 ### Voice management
-- Voice CRUD is handled inside the gateway via a local filesystem client (`clients/voice.py`).
+- Voice CRUD is handled inside the gateway via a local filesystem client (`backends/voice.py`).
 - The `VOICES_DIR` directory is shared with chatterbox via a Docker volume for voice resolution.
 - No separate service or container — the gateway reads/writes WAV files directly.
 
@@ -207,7 +207,7 @@ Some ML packages pull in large unnecessary dependencies (e.g., `chatterbox-tts` 
 5. Expose RPC endpoints + `/models` + `/health`.
 6. Write `Dockerfile` with configurable ARGs/ENVs.
 7. Add service to `docker-compose.yml` with configurable port, volumes, env vars.
-8. Add a typed client in `services/gateway/src/gateway_service/clients/` that extends `BaseBackend`, declares `env_var` and `capabilities`, and add it to `KNOWN_BACKENDS` in `clients/__init__.py`.
+8. Add a typed client in `services/gateway/src/gateway_service/backends/` that extends `BaseBackend` and implements the relevant resource protocols from `protocols.py`. Add a `create` classmethod and register it in `KNOWN_BACKENDS` in `backends/__init__.py`.
 9. Add gateway route(s) that map OpenAI API to the backend's RPC endpoints.
 10. Write tests with mocked engine (backend) or mocked client (gateway).
 11. Write `README.md` with endpoints, config, and build notes.

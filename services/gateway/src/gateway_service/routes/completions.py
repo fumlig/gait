@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 if TYPE_CHECKING:
     from starlette.responses import StreamingResponse
 
-    from gateway_service.clients.protocols import Completions
+    from gateway_service.protocols import Completions
 
 logger = logging.getLogger(__name__)
 
