@@ -1,4 +1,4 @@
-name: trave
+name: gait
 
 services:
   gateway:

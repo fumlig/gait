@@ -96,7 +96,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="Trave API Gateway",
+    title="Gait API Gateway",
     description="Unified OpenAI-compatible API gateway for local ML services",
     version="0.1.0",
     lifespan=lifespan,

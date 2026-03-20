@@ -1,4 +1,4 @@
-# trave
+# gait
 
 Local ML models exposed via OpenAI-compatible REST APIs.
 
@@ -62,13 +62,13 @@ Per-service configuration is documented in each service's README.
 
 ## Systemd
 
-A `trave.service` unit file is provided. Edit `WorkingDirectory` if your checkout isn't at `/home/oskar/projects/trave`, then:
+A `gait.service` unit file is provided. Edit `WorkingDirectory` if your checkout isn't at `/home/oskar/projects/gait`, then:
 
 ```bash
-sudo cp trave.service /etc/systemd/system/
+sudo cp gait.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable trave   # auto-start on boot
-sudo systemctl start trave    # start now
+sudo systemctl enable gait   # auto-start on boot
+sudo systemctl start gait    # start now
 ```
 
 See [AGENTS.md](AGENTS.md) for architecture details and development conventions.

@@ -4,7 +4,7 @@ Context and conventions for AI agents working on this repository.
 
 ## Project overview
 
-Trave exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway handles all OpenAI protocol concerns (request validation, response formatting, model listing). Each ML model runs as a thin backend service in its own Docker container with GPU passthrough, exposing low-level RPC-style endpoints via Starlette.
+Gait exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway handles all OpenAI protocol concerns (request validation, response formatting, model listing). Each ML model runs as a thin backend service in its own Docker container with GPU passthrough, exposing low-level RPC-style endpoints via Starlette.
 
 ## Architecture
 
@@ -31,13 +31,13 @@ Trave exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway
 
 - **Gateway** owns the OpenAI API contract: request/response schemas, format conversion (WAV→MP3, segments→SRT/VTT), model list caching. Also handles voice management directly on a local directory (shared volume with chatterbox).
 - **llamacpp** runs the upstream llama.cpp server image directly. Already OpenAI-compatible — the gateway proxies requests transparently. No custom application code.
-- **Backends** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no trave-common.
+- **Backends** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no gait-common.
 - **Clients** live in the gateway's `backends/` module. Each backend client extends `BaseBackend` (for HTTP backends) and implements resource protocols from `protocols.py`. The gateway auto-discovers which clients to instantiate based on environment variables (`LLAMACPP_URL`, `CHATTERBOX_URL`, `WHISPERX_URL`, `VOICES_DIR`).
 
 ## Repository structure
 
 ```
-trave/
+gait/
   docker-compose.yml          # orchestrates all services
   .env                        # (optional) host-level env vars
   AGENTS.md                   # this file
@@ -249,27 +249,27 @@ Each service has its own `.venv/`. Point your IDE's Python interpreter to the se
 The stack is designed to run locally as a persistent service that survives reboots.
 
 ### Systemd integration
-A `trave.service` unit file is provided in the repo root. Install it once:
+A `gait.service` unit file is provided in the repo root. Install it once:
 ```bash
-sudo cp trave.service /etc/systemd/system/
+sudo cp gait.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
 
 Enable (auto-start on boot):
 ```bash
-sudo systemctl enable trave
+sudo systemctl enable gait
 ```
 
 Disable (stop auto-starting on boot):
 ```bash
-sudo systemctl disable trave
+sudo systemctl disable gait
 ```
 
 Manual start/stop/status:
 ```bash
-sudo systemctl start trave
-sudo systemctl stop trave
-systemctl status trave
+sudo systemctl start gait
+sudo systemctl stop gait
+systemctl status gait
 ```
 
 The unit uses `docker compose up -d --wait` which blocks until all healthchecks pass, and `docker compose down` for clean shutdown. `TimeoutStartSec=600` gives enough time for first-run model downloads.

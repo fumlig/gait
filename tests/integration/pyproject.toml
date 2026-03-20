@@ -1,7 +1,7 @@
 [project]
-name = "trave-integration-tests"
+name = "gait-integration-tests"
 version = "0.1.0"
-description = "Integration tests for the trave gateway using the OpenAI Python client"
+description = "Integration tests for the gait gateway using the OpenAI Python client"
 requires-python = ">=3.12"
 dependencies = [
     "openai>=1.60",

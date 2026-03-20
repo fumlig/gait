@@ -1,4 +1,4 @@
-"""Integration tests for the trave gateway.
+"""Integration tests for the gait gateway.
 
 Requires a running gateway (docker compose up -d). Uses the OpenAI Python
 client. Outputs saved to ./test_outputs/ for manual inspection.

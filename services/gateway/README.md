@@ -1,6 +1,6 @@
 # gateway
 
-FastAPI gateway that exposes OpenAI-compatible REST APIs for all trave backends. Handles request validation, response formatting (WAV→MP3, segments→SRT/VTT), and model list aggregation.
+FastAPI gateway that exposes OpenAI-compatible REST APIs for all gait backends. Handles request validation, response formatting (WAV→MP3, segments→SRT/VTT), and model list aggregation.
 
 ## Endpoints
 

@@ -357,7 +357,7 @@ wheels = [
 ]
 
 [[package]]
-name = "trave-integration-tests"
+name = "gait-integration-tests"
 version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
