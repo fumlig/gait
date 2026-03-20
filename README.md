@@ -60,15 +60,4 @@ curl http://localhost:3000/v1/audio/transcriptions \
 
 Per-service configuration is documented in each service's README.
 
-## Systemd
-
-A `gait.service` unit file is provided. Edit `WorkingDirectory` if your checkout isn't at `/home/oskar/projects/gait`, then:
-
-```bash
-sudo cp gait.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable gait   # auto-start on boot
-sudo systemctl start gait    # start now
-```
-
 See [AGENTS.md](AGENTS.md) for architecture details and development conventions.
