@@ -13,18 +13,18 @@ from gateway_service.models import TranscriptionResponseFormat
 if TYPE_CHECKING:
     from starlette.responses import Response
 
-    from gateway_service.clients.transcription import TranscriptionClient
+    from gateway_service.clients.protocols import AudioTranslations
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_transcription_client(request: Request) -> TranscriptionClient:
-    """Resolve the transcription client from app state (handles translations too)."""
-    client = getattr(request.app.state, "transcription_client", None)
+def _get_translation_client(request: Request) -> AudioTranslations:
+    """Resolve the translation client from app state."""
+    client = getattr(request.app.state, "audio_translations", None)
     if client is None:
-        raise HTTPException(status_code=503, detail="No transcription backend configured.")
+        raise HTTPException(status_code=503, detail="No translation backend configured.")
     return client
 
 
@@ -38,7 +38,7 @@ async def create_translation(
     temperature: float = Form(0.0),
 ) -> Response:
     """Translate audio into English text."""
-    client = _get_transcription_client(request)
+    client = _get_translation_client(request)
 
     # Validate response format
     try:

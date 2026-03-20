@@ -10,9 +10,9 @@ services:
     volumes:
       - ${VOICES_DIR:-./voices}:/app/voices
     environment:
-      - SPEECH_URL=http://chatterbox:8000
-      - TRANSCRIPTION_URL=http://whisperx:8000
-      - CHAT_URL=${CHAT_URL:-http://llamacpp:8000}
+      - CHATTERBOX_URL=http://chatterbox:8000
+      - WHISPERX_URL=http://whisperx:8000
+      - LLAMACPP_URL=${LLAMACPP_URL:-http://llamacpp:8000}
       - VOICES_DIR=/app/voices
       - BACKEND_TIMEOUT=${BACKEND_TIMEOUT:-300}
     depends_on:

@@ -11,18 +11,18 @@ from fastapi.responses import JSONResponse
 if TYPE_CHECKING:
     from starlette.responses import StreamingResponse
 
-    from gateway_service.clients.chat import ChatClient
+    from gateway_service.clients.protocols import Responses
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_chat_client(request: Request) -> ChatClient:
-    """Resolve the chat client from app state."""
-    client = getattr(request.app.state, "chat_client", None)
+def _get_responses_client(request: Request) -> Responses:
+    """Resolve the responses client from app state."""
+    client = getattr(request.app.state, "responses", None)
     if client is None:
-        raise HTTPException(status_code=503, detail="No chat backend configured.")
+        raise HTTPException(status_code=503, detail="No responses backend configured.")
     return client
 
 
@@ -35,16 +35,16 @@ async def create_response(request: Request) -> JSONResponse | StreamingResponse:
 
     See https://platform.openai.com/docs/api-reference/responses
     """
-    client = _get_chat_client(request)
+    client = _get_responses_client(request)
     body = await request.json()
 
     try:
         if body.get("stream"):
-            return await client.forward_stream("/v1/responses", body)
-        result = await client.forward("/v1/responses", body)
+            return await client.create_response_stream(body)
+        result = await client.create_response(body)
         return JSONResponse(content=result)
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Response creation failed")
-        raise HTTPException(status_code=502, detail="Chat backend unavailable.") from exc
+        raise HTTPException(status_code=502, detail="Responses backend unavailable.") from exc

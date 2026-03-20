@@ -8,16 +8,16 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 
 if TYPE_CHECKING:
-    from gateway_service.clients.voice import VoiceClient
+    from gateway_service.clients.protocols import AudioVoices
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_voice_client(request: Request) -> VoiceClient:
+def _get_voice_client(request: Request) -> AudioVoices:
     """Resolve the voice client from app state."""
-    client = getattr(request.app.state, "voice_client", None)
+    client = getattr(request.app.state, "audio_voices", None)
     if client is None:
         raise HTTPException(status_code=503, detail="Voice management not configured.")
     return client

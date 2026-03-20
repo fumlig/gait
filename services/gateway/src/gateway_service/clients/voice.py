@@ -1,20 +1,16 @@
 """Voice client — manages WAV reference clips on a local directory.
 
-This replaces the old HTTP-based voice client. All file operations happen
-directly on the filesystem (the voices directory is shared with the
-chatterbox container via a Docker volume).
+All file operations happen directly on the filesystem (the voices
+directory is shared with the chatterbox container via a Docker volume).
 """
 
 from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 from fastapi import HTTPException
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 from gateway_service.models import Voice
 
@@ -30,12 +26,16 @@ _DEFAULT_VOICE = "default"
 class VoiceClient:
     """Manages voice reference clips on a local directory.
 
-    Provides the same interface as the old HTTP-based client so route
-    handlers stay unchanged.
+    Discovered via the ``VOICES_DIR`` environment variable.  Unlike the
+    HTTP backend clients this operates on the local filesystem, but it
+    follows the same ``env_var``-based registration pattern.
     """
 
-    def __init__(self, voices_dir: Path) -> None:
-        self._voices_dir = voices_dir
+    env_var = "VOICES_DIR"
+    """Environment variable that holds the voices directory path."""
+
+    def __init__(self, voices_dir: str | Path) -> None:
+        self._voices_dir = Path(voices_dir)
 
     def _list_voice_names(self) -> list[str]:
         d = self._voices_dir

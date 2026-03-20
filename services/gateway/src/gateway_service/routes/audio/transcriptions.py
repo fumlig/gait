@@ -13,16 +13,16 @@ from gateway_service.models import TranscriptionResponseFormat
 if TYPE_CHECKING:
     from starlette.responses import Response
 
-    from gateway_service.clients.transcription import TranscriptionClient
+    from gateway_service.clients.protocols import AudioTranscriptions
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_transcription_client(request: Request) -> TranscriptionClient:
+def _get_transcription_client(request: Request) -> AudioTranscriptions:
     """Resolve the transcription client from app state."""
-    client = getattr(request.app.state, "transcription_client", None)
+    client = getattr(request.app.state, "audio_transcriptions", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No transcription backend configured.")
     return client

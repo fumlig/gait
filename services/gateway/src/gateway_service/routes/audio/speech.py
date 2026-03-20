@@ -11,16 +11,16 @@ from fastapi.responses import Response
 from gateway_service.models import SpeechRequest, SpeechResponseFormat
 
 if TYPE_CHECKING:
-    from gateway_service.clients.speech import SpeechClient
+    from gateway_service.clients.protocols import AudioSpeech
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_speech_client(request: Request) -> SpeechClient:
+def _get_speech_client(request: Request) -> AudioSpeech:
     """Resolve the speech client from app state."""
-    client = getattr(request.app.state, "speech_client", None)
+    client = getattr(request.app.state, "audio_speech", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No speech backend configured.")
     return client

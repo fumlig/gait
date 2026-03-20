@@ -23,8 +23,7 @@ from gateway_service.formatting import wav_to_pcm16
 from gateway_service.models import SpeechRequest, SpeechResponseFormat
 
 if TYPE_CHECKING:
-    from gateway_service.clients.chat import ChatClient
-    from gateway_service.clients.speech import SpeechClient
+    from gateway_service.clients.protocols import AudioSpeech, ChatCompletions
 
 logger = logging.getLogger(__name__)
 
@@ -72,17 +71,17 @@ def _extract_sentences(buf: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _get_chat_client(request: Request) -> ChatClient:
-    """Resolve the chat client from app state."""
-    client = getattr(request.app.state, "chat_client", None)
+def _get_chat_client(request: Request) -> ChatCompletions:
+    """Resolve the chat completions client from app state."""
+    client = getattr(request.app.state, "chat_completions", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No chat backend configured.")
     return client
 
 
-def _get_speech_client(request: Request) -> SpeechClient:
+def _get_speech_client(request: Request) -> AudioSpeech:
     """Resolve the speech client from app state."""
-    client = getattr(request.app.state, "speech_client", None)
+    client = getattr(request.app.state, "audio_speech", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No speech backend configured.")
     return client
@@ -125,7 +124,7 @@ def _audio_sse(template: dict, **audio_fields: object) -> str:
 
 
 async def _synth_and_emit(
-    speech_client: SpeechClient,
+    speech_client: AudioSpeech,
     text: str,
     tts_model: str,
     voice: str,
@@ -190,8 +189,8 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
     try:
         if body.get("stream"):
-            return await client.forward_stream("/v1/chat/completions", body)
-        result = await client.forward("/v1/chat/completions", body)
+            return await client.chat_completions_stream(body)
+        result = await client.chat_completions(body)
         return JSONResponse(content=result)
     except HTTPException:
         raise
@@ -202,7 +201,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
 async def _chat_with_audio(
     request: Request,
-    chat_client: ChatClient,
+    chat_client: ChatCompletions,
     body: dict,
 ) -> StreamingResponse:
     """Stream text from the LLM and interleave TTS audio."""
@@ -216,7 +215,7 @@ async def _chat_with_audio(
     llm_body = {k: v for k, v in body.items() if k not in ("modalities", "audio")}
 
     try:
-        llm_resp = await chat_client.stream_raw("/v1/chat/completions", llm_body)
+        llm_resp = await chat_client.chat_completions_stream_raw(llm_body)
     except HTTPException:
         raise
     except Exception as exc:

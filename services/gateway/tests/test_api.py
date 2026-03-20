@@ -1,8 +1,8 @@
 """Tests for the API gateway.
 
-These tests mock the HTTP client instances to avoid needing real backend services.
-The voice client is tested with real filesystem operations (tmp_path).
-Clients are attached directly to ``app.state``.
+These tests mock the backend client instances to avoid needing real backend
+services.  The voice client is tested with real filesystem operations
+(tmp_path).  Clients are attached directly to ``app.state`` protocol slots.
 """
 
 from __future__ import annotations
@@ -120,15 +120,28 @@ MOCK_TRANSCRIPTION_RESULT = TranscriptionResult(
 # ---------------------------------------------------------------------------
 
 
+def _make_mock_stream():
+    """Create a fresh mock StreamingResponse for streaming tests."""
+    from starlette.responses import StreamingResponse
+
+    async def _gen():
+        yield b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
+        yield b"data: [DONE]\n\n"
+
+    return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
 def _make_speech_client(
     *,
     synthesize_result: tuple[bytes, str] = (_WAV_HEADER, "audio/wav"),
     synthesize_error: Exception | None = None,
 ) -> AsyncMock:
-    """Create a mock SpeechClient."""
+    """Create a mock ChatterboxClient (AudioSpeech)."""
     client = AsyncMock()
-    client.health.return_value = {"status": "healthy"}
-    client.list_models.return_value = CHATTERBOX_MODELS
+    client.name = "chatterbox"
+    client.base_url = "http://chatterbox:8000"
+    client.check_health.return_value = {"status": "healthy"}
+    client.fetch_models.return_value = CHATTERBOX_MODELS
     if synthesize_error:
         client.synthesize.side_effect = synthesize_error
     else:
@@ -142,10 +155,12 @@ def _make_transcription_client(
     translate_result: TranscriptionResult | None = None,
     transcribe_error: Exception | None = None,
 ) -> AsyncMock:
-    """Create a mock TranscriptionClient."""
+    """Create a mock WhisperxClient (AudioTranscriptions + AudioTranslations)."""
     client = AsyncMock()
-    client.health.return_value = {"status": "healthy"}
-    client.list_models.return_value = WHISPERX_MODELS
+    client.name = "whisperx"
+    client.base_url = "http://whisperx:8000"
+    client.check_health.return_value = {"status": "healthy"}
+    client.fetch_models.return_value = WHISPERX_MODELS
 
     if transcribe_error:
         client.transcribe.side_effect = transcribe_error
@@ -224,36 +239,29 @@ MOCK_EMBEDDINGS = {
 }
 
 
-def _make_chat_client(
-    *,
-    forward_result: dict | None = None,
-    forward_error: Exception | None = None,
-    stream_result: AsyncMock | None = None,
-    stream_error: Exception | None = None,
-) -> AsyncMock:
-    """Create a mock ChatClient."""
+def _make_chat_client() -> AsyncMock:
+    """Create a mock LlamacppClient (ChatCompletions + Completions + Responses + Embeddings)."""
     client = AsyncMock()
-    client.health.return_value = {"status": "healthy"}
-    client.list_models.return_value = LLAMACPP_MODELS
-    if forward_error:
-        client.forward.side_effect = forward_error
-    else:
-        client.forward.return_value = forward_result or MOCK_CHAT_COMPLETION
-    if stream_error:
-        client.forward_stream.side_effect = stream_error
-    elif stream_result:
-        client.forward_stream.return_value = stream_result
-    else:
-        # Default: return a mock StreamingResponse
-        from starlette.responses import StreamingResponse
+    client.name = "llamacpp"
+    client.base_url = "http://llamacpp:8000"
+    client.check_health.return_value = {"status": "healthy"}
+    client.fetch_models.return_value = LLAMACPP_MODELS
 
-        async def _mock_stream():
-            yield b'data: {"choices":[{"delta":{"content":"Hi"}}]}\n\n'
-            yield b"data: [DONE]\n\n"
+    # ChatCompletions
+    client.chat_completions.return_value = MOCK_CHAT_COMPLETION
+    client.chat_completions_stream.return_value = _make_mock_stream()
 
-        client.forward_stream.return_value = StreamingResponse(
-            _mock_stream(), media_type="text/event-stream"
-        )
+    # Completions
+    client.completions.return_value = MOCK_COMPLETION
+    client.completions_stream.return_value = _make_mock_stream()
+
+    # Responses
+    client.create_response.return_value = MOCK_RESPONSE
+    client.create_response_stream.return_value = _make_mock_stream()
+
+    # Embeddings
+    client.embeddings.return_value = MOCK_EMBEDDINGS
+
     return client
 
 
@@ -284,7 +292,7 @@ def chat_client():
 
 @pytest.fixture()
 def app(speech_client, transcription_client, voice_client, chat_client):
-    """Create a test app with mock clients attached to state."""
+    """Create a test app with mock clients wired to protocol slots."""
     from fastapi import FastAPI
 
     from gateway_service.routes import completions, embeddings, health, models, responses
@@ -304,10 +312,19 @@ def app(speech_client, transcription_client, voice_client, chat_client):
     test_app.include_router(models.router)
     test_app.include_router(health.router)
 
-    test_app.state.speech_client = speech_client
-    test_app.state.transcription_client = transcription_client
-    test_app.state.voice_client = voice_client
-    test_app.state.chat_client = chat_client
+    # Wire protocol slots (mirrors what the real lifespan does)
+    test_app.state.chat_completions = chat_client
+    test_app.state.completions = chat_client
+    test_app.state.responses = chat_client
+    test_app.state.embeddings = chat_client
+    test_app.state.audio_speech = speech_client
+    test_app.state.audio_transcriptions = transcription_client
+    test_app.state.audio_translations = transcription_client
+    test_app.state.audio_voices = voice_client
+
+    # Backend list for health and model discovery
+    test_app.state.backends = [speech_client, transcription_client, chat_client]
+
     test_app.state.models = ALL_MODELS
     test_app.state.models_fetched_at = time.monotonic()
 
@@ -332,21 +349,21 @@ async def test_health_all_healthy(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "ok"
-    assert data["backends"]["speech"] == "healthy"
-    assert data["backends"]["transcription"] == "healthy"
-    assert data["backends"]["chat"] == "healthy"
+    assert data["backends"]["chatterbox"] == "healthy"
+    assert data["backends"]["whisperx"] == "healthy"
+    assert data["backends"]["llamacpp"] == "healthy"
     # Voice is local — not listed as a remote backend
     assert "voice" not in data["backends"]
 
 
 async def test_health_backend_down(client: AsyncClient, speech_client: AsyncMock):
     """Gateway reports 'degraded' when a backend is unreachable."""
-    speech_client.health.side_effect = ConnectionError("Connection refused")
+    speech_client.check_health.side_effect = ConnectionError("Connection refused")
     resp = await client.get("/health")
     assert resp.status_code == 200
     data = resp.json()
     assert data["status"] == "degraded"
-    assert data["backends"]["speech"] == "unreachable"
+    assert data["backends"]["chatterbox"] == "unreachable"
 
 
 # ---------------------------------------------------------------------------
@@ -808,7 +825,7 @@ async def test_voice_client_unavailable():
 
     test_app = FastAPI(lifespan=noop_lifespan)
     test_app.include_router(audio_router)
-    # No voice client on state
+    # No audio_voices on state
 
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -834,8 +851,7 @@ async def test_chat_completions(client: AsyncClient, chat_client: AsyncMock):
     data = resp.json()
     assert data["object"] == "chat.completion"
     assert data["choices"][0]["message"]["content"] == "Hello! How can I help you?"
-    chat_client.forward.assert_called_once_with(
-        "/v1/chat/completions",
+    chat_client.chat_completions.assert_called_once_with(
         {"model": "my-model", "messages": [{"role": "user", "content": "Hello"}]},
     )
 
@@ -853,8 +869,7 @@ async def test_chat_completions_stream(client: AsyncClient, chat_client: AsyncMo
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
     assert "data:" in resp.text
-    chat_client.forward_stream.assert_called_once_with(
-        "/v1/chat/completions",
+    chat_client.chat_completions_stream.assert_called_once_with(
         {"model": "my-model", "messages": [{"role": "user", "content": "Hello"}], "stream": True},
     )
 
@@ -863,7 +878,7 @@ async def test_chat_completions_backend_unavailable(
     client: AsyncClient, chat_client: AsyncMock
 ):
     """Gateway returns 502 when the chat backend raises."""
-    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    chat_client.chat_completions.side_effect = ConnectionError("Connection refused")
     resp = await client.post(
         "/v1/chat/completions",
         json={
@@ -959,7 +974,7 @@ async def test_chat_audio_stream(
 
     wav_24k = _make_wav_24k(100)
     speech_client.synthesize.return_value = (wav_24k, "audio/wav")
-    chat_client.stream_raw.return_value = _MockStreamResponse(_AUDIO_SSE_LINES)
+    chat_client.chat_completions_stream_raw.return_value = _MockStreamResponse(_AUDIO_SSE_LINES)
 
     resp = await client.post(
         "/v1/chat/completions",
@@ -1033,7 +1048,7 @@ async def test_chat_audio_requires_stream(client: AsyncClient, chat_client: Asyn
 
 async def test_chat_audio_no_speech_backend(client: AsyncClient, chat_client: AsyncMock):
     """Audio modality returns 503 when no speech client is configured."""
-    client._transport.app.state.speech_client = None  # type: ignore[union-attr]
+    client._transport.app.state.audio_speech = None  # type: ignore[union-attr]
     resp = await client.post(
         "/v1/chat/completions",
         json={
@@ -1054,7 +1069,7 @@ async def test_chat_audio_synthesis_failure_continues(
     import json as _json
 
     speech_client.synthesize.side_effect = ConnectionError("TTS down")
-    chat_client.stream_raw.return_value = _MockStreamResponse(_AUDIO_SSE_LINES)
+    chat_client.chat_completions_stream_raw.return_value = _MockStreamResponse(_AUDIO_SSE_LINES)
 
     resp = await client.post(
         "/v1/chat/completions",
@@ -1099,7 +1114,6 @@ async def test_chat_audio_synthesis_failure_continues(
 
 async def test_text_completions(client: AsyncClient, chat_client: AsyncMock):
     """POST /v1/completions returns a text completion response."""
-    chat_client.forward.return_value = MOCK_COMPLETION
     resp = await client.post(
         "/v1/completions",
         json={"model": "my-model", "prompt": "Hello"},
@@ -1108,8 +1122,7 @@ async def test_text_completions(client: AsyncClient, chat_client: AsyncMock):
     data = resp.json()
     assert data["object"] == "text_completion"
     assert data["choices"][0]["text"] == "Hello world"
-    chat_client.forward.assert_called_once_with(
-        "/v1/completions",
+    chat_client.completions.assert_called_once_with(
         {"model": "my-model", "prompt": "Hello"},
     )
 
@@ -1122,14 +1135,14 @@ async def test_text_completions_stream(client: AsyncClient, chat_client: AsyncMo
     )
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
-    chat_client.forward_stream.assert_called_once()
+    chat_client.completions_stream.assert_called_once()
 
 
 async def test_text_completions_backend_unavailable(
     client: AsyncClient, chat_client: AsyncMock
 ):
     """Gateway returns 502 when the chat backend raises for completions."""
-    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    chat_client.completions.side_effect = ConnectionError("Connection refused")
     resp = await client.post(
         "/v1/completions",
         json={"model": "my-model", "prompt": "Hello"},
@@ -1144,7 +1157,6 @@ async def test_text_completions_backend_unavailable(
 
 async def test_responses(client: AsyncClient, chat_client: AsyncMock):
     """POST /v1/responses returns a response object."""
-    chat_client.forward.return_value = MOCK_RESPONSE
     resp = await client.post(
         "/v1/responses",
         json={
@@ -1157,8 +1169,7 @@ async def test_responses(client: AsyncClient, chat_client: AsyncMock):
     assert data["object"] == "response"
     assert data["status"] == "completed"
     assert data["output"][0]["content"][0]["text"] == "Hello! How can I help?"
-    chat_client.forward.assert_called_once_with(
-        "/v1/responses",
+    chat_client.create_response.assert_called_once_with(
         {"model": "my-model", "input": "Hello"},
     )
 
@@ -1175,15 +1186,14 @@ async def test_responses_stream(client: AsyncClient, chat_client: AsyncMock):
     )
     assert resp.status_code == 200
     assert "text/event-stream" in resp.headers["content-type"]
-    chat_client.forward_stream.assert_called_once_with(
-        "/v1/responses",
+    chat_client.create_response_stream.assert_called_once_with(
         {"model": "my-model", "input": "Hello", "stream": True},
     )
 
 
 async def test_responses_backend_unavailable(client: AsyncClient, chat_client: AsyncMock):
     """Gateway returns 502 when the chat backend raises for responses."""
-    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    chat_client.create_response.side_effect = ConnectionError("Connection refused")
     resp = await client.post(
         "/v1/responses",
         json={"model": "my-model", "input": "Hello"},
@@ -1198,7 +1208,6 @@ async def test_responses_backend_unavailable(client: AsyncClient, chat_client: A
 
 async def test_embeddings(client: AsyncClient, chat_client: AsyncMock):
     """POST /v1/embeddings returns an embeddings response."""
-    chat_client.forward.return_value = MOCK_EMBEDDINGS
     resp = await client.post(
         "/v1/embeddings",
         json={"model": "my-model", "input": "Hello world"},
@@ -1208,15 +1217,14 @@ async def test_embeddings(client: AsyncClient, chat_client: AsyncMock):
     assert data["object"] == "list"
     assert len(data["data"]) == 1
     assert data["data"][0]["embedding"] == [0.1, 0.2, 0.3]
-    chat_client.forward.assert_called_once_with(
-        "/v1/embeddings",
+    chat_client.embeddings.assert_called_once_with(
         {"model": "my-model", "input": "Hello world"},
     )
 
 
 async def test_embeddings_backend_unavailable(client: AsyncClient, chat_client: AsyncMock):
     """Gateway returns 502 when the chat backend raises for embeddings."""
-    chat_client.forward.side_effect = ConnectionError("Connection refused")
+    chat_client.embeddings.side_effect = ConnectionError("Connection refused")
     resp = await client.post(
         "/v1/embeddings",
         json={"model": "my-model", "input": "Hello world"},
@@ -1225,12 +1233,12 @@ async def test_embeddings_backend_unavailable(client: AsyncClient, chat_client: 
 
 
 # ---------------------------------------------------------------------------
-# LLM backend: no client configured
+# No backend configured → 503
 # ---------------------------------------------------------------------------
 
 
-async def test_llm_client_unavailable():
-    """Gateway returns 503 for all LLM endpoints when no chat client is configured."""
+async def test_no_backend_configured():
+    """Gateway returns 503 for all endpoints when no backends are configured."""
     from fastapi import FastAPI
 
     from gateway_service.routes import completions, embeddings, responses
@@ -1245,7 +1253,7 @@ async def test_llm_client_unavailable():
     test_app.include_router(completions.router)
     test_app.include_router(responses.router)
     test_app.include_router(embeddings.router)
-    # No chat client on state
+    # No protocol slots set on state
 
     transport = ASGITransport(app=test_app)
 

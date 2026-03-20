@@ -9,18 +9,18 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
-    from gateway_service.clients.chat import ChatClient
+    from gateway_service.clients.protocols import Embeddings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
 
-def _get_chat_client(request: Request) -> ChatClient:
-    """Resolve the chat client from app state."""
-    client = getattr(request.app.state, "chat_client", None)
+def _get_embeddings_client(request: Request) -> Embeddings:
+    """Resolve the embeddings client from app state."""
+    client = getattr(request.app.state, "embeddings", None)
     if client is None:
-        raise HTTPException(status_code=503, detail="No chat backend configured.")
+        raise HTTPException(status_code=503, detail="No embeddings backend configured.")
     return client
 
 
@@ -30,14 +30,14 @@ async def embeddings(request: Request) -> JSONResponse:
 
     Transparently proxies the request to the llama.cpp server backend.
     """
-    client = _get_chat_client(request)
+    client = _get_embeddings_client(request)
     body = await request.json()
 
     try:
-        result = await client.forward("/v1/embeddings", body)
+        result = await client.embeddings(body)
         return JSONResponse(content=result)
     except HTTPException:
         raise
     except Exception as exc:
         logger.exception("Embeddings request failed")
-        raise HTTPException(status_code=502, detail="Chat backend unavailable.") from exc
+        raise HTTPException(status_code=502, detail="Embeddings backend unavailable.") from exc
