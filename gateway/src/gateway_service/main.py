@@ -11,9 +11,9 @@ import httpx
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from gateway_service.config import settings
 from gateway_service.providers import KNOWN_PROVIDERS
 from gateway_service.providers.base import BaseProvider
-from gateway_service.config import settings
 from gateway_service.providers.protocols import PROTOCOL_SLOTS
 from gateway_service.routes import completions, embeddings, health, models, responses
 from gateway_service.routes.audio import router as audio_router

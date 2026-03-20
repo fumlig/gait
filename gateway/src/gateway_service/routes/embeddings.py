@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gateway_service.models import EmbeddingRequest, EmbeddingResponse
+
 if TYPE_CHECKING:
     from gateway_service.providers.protocols import Embeddings
 
@@ -21,13 +23,20 @@ def _get_embeddings_client(request: Request) -> Embeddings:
     return client
 
 
-@router.post("/v1/embeddings")
-async def embeddings(request: Request) -> JSONResponse:
+@router.post(
+    "/v1/embeddings",
+    response_model=EmbeddingResponse,
+    response_model_exclude_unset=True,
+)
+async def embeddings(
+    request: Request,
+    body: EmbeddingRequest,
+) -> JSONResponse:
     client = _get_embeddings_client(request)
-    body = await request.json()
+    payload = body.model_dump(exclude_unset=True)
 
     try:
-        result = await client.embeddings(body)
+        result = await client.embeddings(payload)
         return JSONResponse(content=result)
     except HTTPException:
         raise

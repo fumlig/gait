@@ -7,8 +7,8 @@ from typing import ClassVar
 
 from fastapi import HTTPException
 
-from gateway_service.providers.base import BaseProvider
 from gateway_service.models import RawSegment, TranscriptionResult, WordTimestamp
+from gateway_service.providers.base import BaseProvider
 from gateway_service.providers.protocols import AudioTranscriptions, AudioTranslations
 
 logger = logging.getLogger(__name__)

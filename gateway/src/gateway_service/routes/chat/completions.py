@@ -1,6 +1,6 @@
 """POST /v1/chat/completions — proxied to llama.cpp server.
 
-When the request includes modalities: ["text", "audio"], the gateway streams
+When the request includes modalities: ["text", "audio"] the gateway streams
 text from the LLM and interleaves synthesised PCM16 audio from the speech
 backend, matching the OpenAI streaming audio contract.
 """
@@ -20,7 +20,13 @@ from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
 from gateway_service.formatting import wav_to_pcm16
-from gateway_service.models import SpeechRequest, SpeechResponseFormat
+from gateway_service.models import (
+    ChatAudioConfig,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    SpeechRequest,
+    SpeechResponseFormat,
+)
 
 if TYPE_CHECKING:
     from gateway_service.providers.protocols import AudioSpeech, ChatCompletions
@@ -117,25 +123,32 @@ async def _synth_and_emit(
         logger.exception("Audio synthesis failed for chunk: %s", text[:80])
 
 
-@router.post("/v1/chat/completions", response_model=None)
-async def chat_completions(request: Request) -> JSONResponse | StreamingResponse:
+@router.post(
+    "/v1/chat/completions",
+    response_model=ChatCompletionResponse,
+    response_model_exclude_unset=True,
+)
+async def chat_completions(
+    request: Request,
+    body: ChatCompletionRequest,
+) -> JSONResponse | StreamingResponse:
     client = _get_chat_client(request)
-    body = await request.json()
 
-    wants_audio = "audio" in (body.get("modalities") or [])
+    wants_audio = body.modalities is not None and "audio" in body.modalities
 
     if wants_audio:
-        if not body.get("stream"):
+        if not body.stream:
             raise HTTPException(
                 status_code=400,
                 detail="Audio modality currently requires stream=true.",
             )
         return await _chat_with_audio(request, client, body)
 
+    payload = body.model_dump(exclude_unset=True)
     try:
-        if body.get("stream"):
-            return await client.chat_completions_stream(body)
-        result = await client.chat_completions(body)
+        if body.stream:
+            return await client.chat_completions_stream(payload)
+        result = await client.chat_completions(payload)
         return JSONResponse(content=result)
     except HTTPException:
         raise
@@ -145,17 +158,19 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
 
 async def _chat_with_audio(
-    request: Request, chat_client: ChatCompletions, body: dict,
+    request: Request,
+    chat_client: ChatCompletions,
+    body: ChatCompletionRequest,
 ) -> StreamingResponse:
     """Stream text from the LLM and interleave TTS audio."""
     speech_client = _get_speech_client(request)
 
-    audio_cfg = body.get("audio", {})
-    voice = audio_cfg.get("voice", "default")
-    tts_model = audio_cfg.get("model") or _find_tts_model(request)
+    audio_cfg = body.audio or ChatAudioConfig()
+    voice = audio_cfg.voice
+    tts_model = audio_cfg.model or _find_tts_model(request)
 
-    # Strip audio-specific fields before forwarding to the LLM
-    llm_body = {k: v for k, v in body.items() if k not in ("modalities", "audio")}
+    # Build LLM payload without audio-specific fields
+    llm_body = body.model_dump(exclude_unset=True, exclude={"modalities", "audio"})
 
     try:
         llm_resp = await chat_client.chat_completions_stream_raw(llm_body)

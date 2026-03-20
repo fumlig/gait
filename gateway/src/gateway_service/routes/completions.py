@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gateway_service.models import CompletionRequest, CompletionResponse
+
 if TYPE_CHECKING:
     from starlette.responses import StreamingResponse
 
@@ -23,15 +25,22 @@ def _get_completions_client(request: Request) -> Completions:
     return client
 
 
-@router.post("/v1/completions", response_model=None)
-async def completions(request: Request) -> JSONResponse | StreamingResponse:
+@router.post(
+    "/v1/completions",
+    response_model=CompletionResponse,
+    response_model_exclude_unset=True,
+)
+async def completions(
+    request: Request,
+    body: CompletionRequest,
+) -> JSONResponse | StreamingResponse:
     client = _get_completions_client(request)
-    body = await request.json()
+    payload = body.model_dump(exclude_unset=True)
 
     try:
-        if body.get("stream"):
-            return await client.completions_stream(body)
-        result = await client.completions(body)
+        if body.stream:
+            return await client.completions_stream(payload)
+        result = await client.completions(payload)
         return JSONResponse(content=result)
     except HTTPException:
         raise

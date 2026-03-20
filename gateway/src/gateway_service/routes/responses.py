@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from gateway_service.models import CreateResponseRequest, CreateResponseResponse
+
 if TYPE_CHECKING:
     from starlette.responses import StreamingResponse
 
@@ -23,15 +25,22 @@ def _get_responses_client(request: Request) -> Responses:
     return client
 
 
-@router.post("/v1/responses", response_model=None)
-async def create_response(request: Request) -> JSONResponse | StreamingResponse:
+@router.post(
+    "/v1/responses",
+    response_model=CreateResponseResponse,
+    response_model_exclude_unset=True,
+)
+async def create_response(
+    request: Request,
+    body: CreateResponseRequest,
+) -> JSONResponse | StreamingResponse:
     client = _get_responses_client(request)
-    body = await request.json()
+    payload = body.model_dump(exclude_unset=True)
 
     try:
-        if body.get("stream"):
-            return await client.create_response_stream(body)
-        result = await client.create_response(body)
+        if body.stream:
+            return await client.create_response_stream(payload)
+        result = await client.create_response(payload)
         return JSONResponse(content=result)
     except HTTPException:
         raise
