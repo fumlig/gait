@@ -316,6 +316,12 @@
                     <label for="stt-model">STT</label>
                     <select id="stt-model"></select>
 
+                    <label for="thinking-toggle">Thinking</label>
+                    <select id="thinking-toggle">
+                        <option value="off">Off</option>
+                        <option value="on">On</option>
+                    </select>
+
                     <textarea
                         id="system-prompt"
                         rows="2"
@@ -582,7 +588,13 @@ You are a helpful assistant.</textarea
                 let player = null;
 
                 try {
-                    const body = { model, messages: msgs, stream: true };
+                    const thinking = $("#thinking-toggle").value === "on";
+                    const body = {
+                        model,
+                        messages: msgs,
+                        stream: true,
+                        chat_template_kwargs: { enable_thinking: thinking },
+                    };
 
                     if (useAudioModality) {
                         body.modalities = ["text", "audio"];
@@ -629,6 +641,13 @@ You are a helpful assistant.</textarea
                             try {
                                 const delta =
                                     JSON.parse(payload).choices?.[0]?.delta;
+
+                                // Reasoning token (thinking mode)
+                                if (delta?.reasoning_content) {
+                                    full += delta.reasoning_content;
+                                    contentEl.textContent = full;
+                                    scrollDown();
+                                }
 
                                 // Text token
                                 if (delta?.content) {

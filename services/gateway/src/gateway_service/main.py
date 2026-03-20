@@ -31,9 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Chat backend capabilities (llama-server doesn't return capabilities,
-# so we inject them at the gateway level).
+# Backend capabilities — backends don't return capabilities in their /models
+# responses, so the gateway injects them based on which backend the model
+# came from.
 _CHAT_CAPABILITIES = ["chat", "completions", "embeddings"]
+_SPEECH_CAPABILITIES = ["speech"]
+_TRANSCRIPTION_CAPABILITIES = ["transcription"]
 
 
 async def _fetch_models(
@@ -60,9 +63,14 @@ async def _fetch_models(
                 capabilities=m.get("capabilities", []),
                 loaded=m.get("loaded", True),
             )
-            # Inject capabilities for chat backend (llama-server doesn't return them)
-            if name == "chat" and not obj.capabilities:
-                obj.capabilities = list(_CHAT_CAPABILITIES)
+            # Inject capabilities based on which backend the model came from
+            if not obj.capabilities:
+                if name == "chat":
+                    obj.capabilities = list(_CHAT_CAPABILITIES)
+                elif name == "speech":
+                    obj.capabilities = list(_SPEECH_CAPABILITIES)
+                elif name == "transcription":
+                    obj.capabilities = list(_TRANSCRIPTION_CAPABILITIES)
             result.append(obj)
         return result
     except Exception:

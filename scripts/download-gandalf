@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# download-gandalf — download a Gandalf voice clip from YouTube and clean it.
+#
+# Downloads a 10-second segment (0:56–1:06) from the specified video,
+# passes it through clean-voice, and writes the result to voices/gandalf.wav.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+URL="https://www.youtube.com/watch?v=mJZZNHekEQw"
+START="00:00:56"
+DURATION="10"
+
+RAW_FILE="$(mktemp --suffix=.wav)"
+OUTPUT="$PROJECT_DIR/voices/gandalf.wav"
+
+cleanup() { rm -f "$RAW_FILE"; }
+trap cleanup EXIT
+
+echo "Downloading audio from $URL (${START} + ${DURATION}s)..."
+yt-dlp \
+    --no-playlist \
+    --extract-audio \
+    --audio-format wav \
+    --postprocessor-args "ffmpeg:-ss $START -t $DURATION" \
+    --output "$RAW_FILE" \
+    --force-overwrites \
+    "$URL"
+
+echo "Cleaning voice sample..."
+"$SCRIPT_DIR/clean-voice" "$RAW_FILE" "$OUTPUT"
+
+echo "Voice sample ready: $OUTPUT"

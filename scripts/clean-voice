@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# clean-voice — prepare an audio file as a TTS voice reference sample.
+#
+# Uses the arnndn RNN-based speech denoiser (leavened-quisling model,
+# trained for voice signal + general noise) to remove background noise
+# while preserving speech, then normalises loudness.
+#
+# The RNN model is downloaded automatically on first run.
+#
+# Usage:
+#   clean-voice INPUT OUTPUT
+#
+# Both arguments are required. OUTPUT should be a .wav file.
+
+set -euo pipefail
+
+if [[ $# -lt 2 ]]; then
+    echo "Usage: clean-voice INPUT OUTPUT" >&2
+    exit 1
+fi
+
+INPUT="$1"
+OUTPUT="$2"
+
+if [[ ! -f "$INPUT" ]]; then
+    echo "Error: input file '$INPUT' does not exist." >&2
+    exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+MODELS_DIR="$SCRIPT_DIR/models"
+MODEL="$MODELS_DIR/lq.rnnn"
+
+# Download the RNN noise model if missing
+if [[ ! -f "$MODEL" ]]; then
+    echo "Downloading RNN noise model (leavened-quisling)..."
+    mkdir -p "$MODELS_DIR"
+    curl -sL "https://raw.githubusercontent.com/GregorR/rnnoise-models/master/leavened-quisling-2018-08-31/lq.rnnn" -o "$MODEL"
+    echo "Model saved to $MODEL"
+fi
+
+mkdir -p "$(dirname "$OUTPUT")"
+
+FILTER_CHAIN="aformat=sample_fmts=fltp:sample_rates=24000:channel_layouts=mono,arnndn=m=${MODEL},dynaudnorm=p=0.95:s=5"
+
+echo "Cleaning voice sample: $INPUT -> $OUTPUT"
+ffmpeg -y -i "$INPUT" -af "$FILTER_CHAIN" -c:a pcm_s16le "$OUTPUT"
+echo "Done: $OUTPUT"

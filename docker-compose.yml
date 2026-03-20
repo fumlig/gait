@@ -35,7 +35,7 @@ services:
       - ${VOICES_DIR:-./voices}:/app/voices
     environment:
       - DEVICE=${CHATTERBOX_DEVICE:-cuda}
-      - DEFAULT_MODEL=${CHATTERBOX_DEFAULT_MODEL:-}
+      - DEFAULT_MODEL=${CHATTERBOX_DEFAULT_MODEL:-chatterbox}
       - MODEL_IDLE_TIMEOUT=${CHATTERBOX_IDLE_TIMEOUT:-0}
       - HF_TOKEN=${HF_TOKEN:-}
     deploy:
@@ -61,7 +61,7 @@ services:
       - ${HF_HOME:-~/.cache/huggingface}:/root/.cache/huggingface
     environment:
       - DEVICE=${WHISPERX_DEVICE:-cuda}
-      - DEFAULT_MODEL=${WHISPERX_DEFAULT_MODEL:-}
+      - DEFAULT_MODEL=${WHISPERX_DEFAULT_MODEL:-large-v3}
       - COMPUTE_TYPE=${WHISPERX_COMPUTE_TYPE:-float16}
       - BATCH_SIZE=${WHISPERX_BATCH_SIZE:-16}
       - ENABLE_DIARIZATION=${WHISPERX_ENABLE_DIARIZATION:-false}
@@ -100,6 +100,11 @@ services:
       - LLAMA_ARG_EMBEDDINGS=${LLAMA_EMBEDDINGS:-1}
       - LLAMA_ARG_POOLING=${LLAMA_POOLING:-mean}
       - LLAMA_ARG_SLEEP_IDLE_SECONDS=${LLAMA_IDLE_TIMEOUT:--1}
+      - LLAMA_ARG_JINJA=${LLAMA_JINJA:-true}
+      - LLAMA_ARG_TEMP=${LLAMA_TEMP:-1.0}
+      - LLAMA_ARG_TOP_P=${LLAMA_TOP_P:-0.95}
+      - LLAMA_ARG_TOP_K=${LLAMA_TOP_K:-20}
+      - LLAMA_ARG_MIN_P=${LLAMA_MIN_P:-0.0}
       - HF_TOKEN=${HF_TOKEN:-}
     deploy:
       resources:

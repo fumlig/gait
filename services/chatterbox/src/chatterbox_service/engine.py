@@ -120,6 +120,11 @@ class ChatterboxEngine:
             logger.info("Model %s already loaded, skipping.", model_name)
             return
 
+        # Unload any previously loaded models first to free VRAM.
+        if self._models:
+            logger.info("Unloading existing models before loading %s", model_name)
+            self.unload()
+
         logger.info("Loading %s on device=%s ...", model_name, settings.device)
 
         if model_name == "chatterbox-turbo":
@@ -139,6 +144,8 @@ class ChatterboxEngine:
 
         else:
             raise ValueError(f"Unknown model: {model_name}")
+
+
 
         self._models[model_name] = model
         self._sample_rates[model_name] = model.sr
@@ -287,7 +294,8 @@ class ChatterboxEngine:
 
         sr = self._sample_rates[model_name]
 
-        with torch.inference_mode():
+        autocast = settings.device == "cuda" and torch.cuda.is_available()
+        with torch.inference_mode(), torch.autocast("cuda", enabled=autocast):
             if model_name == "chatterbox-turbo":
                 wav = self._generate_turbo(
                     model,

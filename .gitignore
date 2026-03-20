@@ -39,3 +39,6 @@ models/*
 !models/.gitkeep
 voices/*
 !voices/.gitkeep
+
+# Downloaded RNN noise models for voice cleaning
+scripts/models/
