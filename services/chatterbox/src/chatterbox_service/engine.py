@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import random
+import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -14,6 +15,14 @@ from chatterbox_service.config import settings
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# GPU optimisations (safe on all devices, only meaningful on CUDA Ampere+)
+# ---------------------------------------------------------------------------
+
+if torch.cuda.is_available():
+    torch.set_float32_matmul_precision("high")  # use TF32 for matmuls
+    torch.backends.cudnn.benchmark = True  # auto-tune cudnn kernels
 
 # ---------------------------------------------------------------------------
 # Language support
@@ -87,12 +96,13 @@ class ChatterboxEngine:
     """Manages multiple Chatterbox model variants.
 
     Models are loaded lazily on first request.  The ``default_model`` is
-    preloaded during FastAPI lifespan startup to keep the first request fast.
+    optionally preloaded during Starlette lifespan startup.
     """
 
     def __init__(self) -> None:
         self._models: dict[str, Any] = {}
         self._sample_rates: dict[str, int] = {}
+        self._last_used: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -132,6 +142,7 @@ class ChatterboxEngine:
 
         self._models[model_name] = model
         self._sample_rates[model_name] = model.sr
+        self.touch()
         logger.info("Model %s loaded. Sample rate=%d", model_name, model.sr)
 
     def unload(self, model_name: str | None = None) -> None:
@@ -160,6 +171,37 @@ class ChatterboxEngine:
         if resolved not in self._models:
             self.load(resolved)
         return resolved
+
+    # ------------------------------------------------------------------
+    # Idle tracking
+    # ------------------------------------------------------------------
+
+    def touch(self) -> None:
+        """Record that the engine was just used (reset idle timer)."""
+        self._last_used = time.monotonic()
+
+    def idle_seconds(self) -> float:
+        """Return the number of seconds since last use, or 0 if never used."""
+        if not self.is_loaded or self._last_used == 0.0:
+            return 0.0
+        return time.monotonic() - self._last_used
+
+    def unload_if_idle(self, timeout: float) -> bool:
+        """Unload all models if idle longer than *timeout* seconds.
+
+        Returns True if models were unloaded.
+        """
+        if timeout <= 0 or not self.is_loaded:
+            return False
+        if self.idle_seconds() >= timeout:
+            logger.info(
+                "Idle for %.0fs (timeout=%ds), unloading models.",
+                self.idle_seconds(),
+                timeout,
+            )
+            self.unload()
+            return True
+        return False
 
     # ------------------------------------------------------------------
     # Introspection
@@ -234,6 +276,8 @@ class ChatterboxEngine:
         if model is None:
             raise RuntimeError(f"Model {model_name} not loaded — call load() first")
 
+        self.touch()
+
         # Set seed for reproducibility
         if seed is not None and seed != 0:
             _set_seed(seed)
@@ -243,45 +287,46 @@ class ChatterboxEngine:
 
         sr = self._sample_rates[model_name]
 
-        if model_name == "chatterbox-turbo":
-            wav = self._generate_turbo(
-                model,
-                text,
-                audio_prompt_path=audio_prompt_path,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                top_p=top_p,
-                top_k=top_k,
-            )
+        with torch.inference_mode():
+            if model_name == "chatterbox-turbo":
+                wav = self._generate_turbo(
+                    model,
+                    text,
+                    audio_prompt_path=audio_prompt_path,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                    top_p=top_p,
+                    top_k=top_k,
+                )
 
-        elif model_name == "chatterbox":
-            wav = self._generate_original(
-                model,
-                text,
-                audio_prompt_path=audio_prompt_path,
-                exaggeration=exaggeration,
-                cfg_weight=cfg_weight,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                top_p=top_p,
-                min_p=min_p,
-            )
+            elif model_name == "chatterbox":
+                wav = self._generate_original(
+                    model,
+                    text,
+                    audio_prompt_path=audio_prompt_path,
+                    exaggeration=exaggeration,
+                    cfg_weight=cfg_weight,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                    top_p=top_p,
+                    min_p=min_p,
+                )
 
-        elif model_name == "chatterbox-multilingual":
-            wav = self._generate_multilingual(
-                model,
-                text,
-                language=language or "en",
-                audio_prompt_path=audio_prompt_path,
-                exaggeration=exaggeration,
-                cfg_weight=cfg_weight,
-                temperature=temperature,
-                repetition_penalty=repetition_penalty,
-                top_p=top_p,
-                min_p=min_p,
-            )
-        else:
-            raise RuntimeError(f"No generate implementation for {model_name}")
+            elif model_name == "chatterbox-multilingual":
+                wav = self._generate_multilingual(
+                    model,
+                    text,
+                    language=language or "en",
+                    audio_prompt_path=audio_prompt_path,
+                    exaggeration=exaggeration,
+                    cfg_weight=cfg_weight,
+                    temperature=temperature,
+                    repetition_penalty=repetition_penalty,
+                    top_p=top_p,
+                    min_p=min_p,
+                )
+            else:
+                raise RuntimeError(f"No generate implementation for {model_name}")
 
         # Apply speed adjustment via resampling if speed != 1.0
         if speed != 1.0:

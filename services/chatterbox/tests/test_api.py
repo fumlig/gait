@@ -32,6 +32,7 @@ def mock_engine():
         }
         eng.generate.return_value = (DUMMY_WAV, SAMPLE_RATE)
         eng.ensure_model.return_value = "chatterbox-turbo"
+        eng.touch.return_value = None
         # Also patch the engine used in app.py (same singleton)
         with patch("chatterbox_service.app.engine", eng):
             yield eng
@@ -111,6 +112,25 @@ async def test_list_models_owned_by(client: AsyncClient):
     data = resp.json()
     for model in data["data"]:
         assert model["owned_by"] == "resemble-ai"
+
+
+async def test_list_models_capabilities(client: AsyncClient):
+    """Models endpoint returns capabilities for each model."""
+    resp = await client.get("/models")
+    data = resp.json()
+    for model in data["data"]:
+        assert "capabilities" in model
+        assert "speech" in model["capabilities"]
+
+
+async def test_list_models_loaded_status(client: AsyncClient):
+    """Models endpoint returns loaded status for each model."""
+    resp = await client.get("/models")
+    data = resp.json()
+    by_id = {m["id"]: m for m in data["data"]}
+    assert by_id["chatterbox-turbo"]["loaded"] is True
+    assert by_id["chatterbox"]["loaded"] is False
+    assert by_id["chatterbox-multilingual"]["loaded"] is False
 
 
 # ---------------------------------------------------------------------------

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -30,8 +31,14 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Chat backend capabilities (llama-server doesn't return capabilities,
+# so we inject them at the gateway level).
+_CHAT_CAPABILITIES = ["chat", "completions", "embeddings"]
 
-async def _fetch_models(client: httpx.AsyncClient, name: str, url: str) -> list[ModelObject]:
+
+async def _fetch_models(
+    client: httpx.AsyncClient, name: str, url: str
+) -> list[ModelObject]:
     """Fetch models from a backend service, logging and returning [] on failure."""
     try:
         resp = await client.get(url, timeout=10.0)
@@ -41,7 +48,23 @@ async def _fetch_models(client: httpx.AsyncClient, name: str, url: str) -> list[
             )
             return []
         data = resp.json()
-        return [ModelObject(**m) for m in data.get("data", [])]
+        raw_models = data.get("data", [])
+        result = []
+        for m in raw_models:
+            # Parse with defaults — backends may or may not include new fields
+            obj = ModelObject(
+                id=m.get("id", ""),
+                object=m.get("object", "model"),
+                created=m.get("created", 0),
+                owned_by=m.get("owned_by", ""),
+                capabilities=m.get("capabilities", []),
+                loaded=m.get("loaded", True),
+            )
+            # Inject capabilities for chat backend (llama-server doesn't return them)
+            if name == "chat" and not obj.capabilities:
+                obj.capabilities = list(_CHAT_CAPABILITIES)
+            result.append(obj)
+        return result
     except Exception:
         logger.warning(
             "Model discovery failed for %s (%s) — it may not be ready yet",
@@ -52,6 +75,50 @@ async def _fetch_models(client: httpx.AsyncClient, name: str, url: str) -> list[
         return []
 
 
+async def fetch_all_models(application: FastAPI) -> list[ModelObject]:
+    """Fetch models from all backends and merge (with deduplication).
+
+    Also updates ``app.state.model_backends`` mapping.
+    """
+    client: httpx.AsyncClient = application.state._http_client
+
+    speech_url = settings.speech_url
+    transcription_url = settings.transcription_url
+    chat_url = settings.chat_url
+
+    futures = []
+    backend_names = []
+
+    if speech_url:
+        futures.append(_fetch_models(client, "speech", f"{speech_url.rstrip('/')}/models"))
+        backend_names.append("speech")
+    if transcription_url:
+        futures.append(
+            _fetch_models(client, "transcription", f"{transcription_url.rstrip('/')}/models")
+        )
+        backend_names.append("transcription")
+    if chat_url:
+        futures.append(_fetch_models(client, "chat", f"{chat_url.rstrip('/')}/v1/models"))
+        backend_names.append("chat")
+
+    all_model_lists = await asyncio.gather(*futures)
+
+    # Merge and deduplicate
+    seen: set[str] = set()
+    merged: list[ModelObject] = []
+
+    for _backend_name, model_list in zip(backend_names, all_model_lists, strict=True):
+        for model in model_list:
+            if model.id not in seen:
+                seen.add(model.id)
+                merged.append(model)
+
+    application.state.models = merged
+    application.state.models_fetched_at = time.monotonic()
+
+    return merged
+
+
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     """Create httpx client, build clients, discover models."""
@@ -59,6 +126,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         timeout=httpx.Timeout(settings.backend_timeout, connect=10.0),
         follow_redirects=False,
     )
+    application.state._http_client = client
 
     # Create typed clients
     speech_client = SpeechClient(base_url=settings.speech_url, client=client)
@@ -69,35 +137,15 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     if settings.chat_url:
         chat_client = ChatClient(base_url=settings.chat_url, client=client)
 
-    # Discover models from all backends (concurrently)
-    model_futures = [
-        _fetch_models(client, "speech", f"{settings.speech_url.rstrip('/')}/models"),
-        _fetch_models(client, "transcription", f"{settings.transcription_url.rstrip('/')}/models"),
-    ]
-    if chat_client:
-        model_futures.append(
-            _fetch_models(client, "chat", f"{settings.chat_url.rstrip('/')}/v1/models"),
-        )
-
-    all_model_lists = await asyncio.gather(*model_futures)
-
-    # Merge and deduplicate
-    seen: set[str] = set()
-    merged: list[ModelObject] = []
-    for model_list in all_model_lists:
-        for model in model_list:
-            if model.id not in seen:
-                seen.add(model.id)
-                merged.append(model)
-
-    logger.info("Model discovery complete — %d model(s)", len(merged))
-
-    # Store on app state
+    # Store clients on app state
     application.state.speech_client = speech_client
     application.state.transcription_client = transcription_client
     application.state.voice_client = voice_client
     application.state.chat_client = chat_client
-    application.state.models = merged
+
+    # Initial model discovery
+    merged = await fetch_all_models(application)
+    logger.info("Model discovery complete — %d model(s)", len(merged))
 
     backends_msg = (
         f"speech={settings.speech_url}, transcription={settings.transcription_url}, "

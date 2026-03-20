@@ -3,16 +3,22 @@
 RPC-style backend for the gateway.  No OpenAI-compatible routing —
 just raw transcribe / translate / models / health endpoints.
 
+Models are loaded lazily on first request via ``engine.ensure_model``
+and unloaded automatically after a configurable idle timeout.
+
 Endpoints:
     POST /transcribe  - multipart (file + params) -> JSON segments
     POST /translate   - multipart (file + params) -> JSON segments
-    GET  /models      - list available models
+    GET  /models      - list available models with loaded status
     GET  /health      - liveness / readiness check
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
+import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -53,7 +59,7 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     if not model:
         return JSONResponse({"detail": "'model' is required."}, status_code=400)
 
-    # Ensure model is loaded
+    # Ensure model is loaded (lazy loading)
     try:
         engine.ensure_model(str(model))
     except Exception as exc:
@@ -83,7 +89,20 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     temperature = float(form.get("temperature", 0.0))
     word_timestamps_raw = str(form.get("word_timestamps", "false"))
     want_words = word_timestamps_raw.lower() == "true"
-    want_diarize = want_words and settings.enable_diarization
+
+    # Diarization: per-request opt-in via `diarize` field, but only if the
+    # server has diarization enabled in its config (ENABLE_DIARIZATION=true)
+    # AND a HuggingFace token is available (required by pyannote).
+    diarize_raw = str(form.get("diarize", "false"))
+    want_diarize = (
+        diarize_raw.lower() == "true"
+        and settings.enable_diarization
+        and bool(os.getenv("HF_TOKEN"))
+    )
+
+    # Diarization needs word-level alignment to assign speakers to words
+    if want_diarize:
+        want_words = True
 
     # Build kwargs (only pass language for transcribe, not translate)
     transcribe_kwargs: dict = {
@@ -123,9 +142,17 @@ async def translate(request: Request) -> JSONResponse:
 
 
 async def list_models(request: Request) -> JSONResponse:
-    """Return available model list."""
+    """Return available model list with capabilities and loaded status."""
+    loaded_name = engine.loaded_model_name
     models = [
-        {"id": model_id, "object": "model", "owned_by": "whisperx"}
+        {
+            "id": model_id,
+            "object": "model",
+            "owned_by": "whisperx",
+            "capabilities": ["transcription", "translation"],
+            "loaded": model_id == loaded_name
+            or (model_id == "whisper-1" and loaded_name is not None),
+        }
         for model_id in engine.list_available_models()
     ]
     return JSONResponse({"object": "list", "data": models})
@@ -137,6 +164,7 @@ async def health(request: Request) -> JSONResponse:
         {
             "status": "ok",
             "model_loaded": engine.is_loaded,
+            "loaded_model": engine.loaded_model_name,
         }
     )
 
@@ -148,9 +176,38 @@ async def health(request: Request) -> JSONResponse:
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    """Load the default model on startup, release on shutdown."""
-    engine.load()
+    """Optionally preload the default model, start idle checker."""
+    idle_task = None
+
+    # Start idle timeout background task if configured
+    if settings.model_idle_timeout > 0:
+
+        async def _idle_checker() -> None:
+            while True:
+                await asyncio.sleep(30)
+                if engine.unload_if_idle(settings.model_idle_timeout):
+                    logger.info(
+                        "Model unloaded due to idle timeout (%ds).",
+                        settings.model_idle_timeout,
+                    )
+
+        idle_task = asyncio.create_task(_idle_checker())
+
+    # Optionally preload default model
+    if settings.default_model:
+        logger.info("Preloading default model: %s", settings.default_model)
+        engine.load()
+    else:
+        logger.info(
+            "No default model configured — models will be loaded lazily on first request."
+        )
+
     yield
+
+    if idle_task:
+        idle_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await idle_task
     engine.unload()
 
 

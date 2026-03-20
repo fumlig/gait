@@ -33,12 +33,18 @@ __all__ = [
 
 
 class ModelObject(BaseModel):
-    """A single model entry in the OpenAI /v1/models response."""
+    """A single model entry in the OpenAI /v1/models response.
+
+    Extended with ``capabilities`` (what the model can do) and ``loaded``
+    (whether it is currently in GPU memory).
+    """
 
     id: str
     object: Literal["model"] = "model"
     created: int = 0
     owned_by: str = ""
+    capabilities: list[str] = Field(default_factory=list)
+    loaded: bool = True
 
 
 class ModelListResponse(BaseModel):

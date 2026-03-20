@@ -3,14 +3,19 @@
 RPC-style backend for the gateway.  No OpenAI-compatible routing —
 just raw synthesize / models / health endpoints.
 
+Models are loaded lazily on first request via ``engine.ensure_model``
+and unloaded automatically after a configurable idle timeout.
+
 Endpoints:
     POST /synthesize  - JSON body -> audio/wav binary
-    GET  /models      - list available models
+    GET  /models      - list available models with loaded status
     GET  /health      - liveness / readiness check
 """
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import io
 import json
 import logging
@@ -45,9 +50,20 @@ logger = logging.getLogger(__name__)
 # Helpers
 # ---------------------------------------------------------------------------
 
-AVAILABLE_MODELS = [
-    {"id": name, "object": "model", "owned_by": "resemble-ai"} for name in sorted(KNOWN_MODELS)
-]
+
+def _build_model_list() -> list[dict]:
+    """Build the model list with capabilities and loaded status."""
+    loaded = engine.loaded_models
+    return [
+        {
+            "id": name,
+            "object": "model",
+            "owned_by": "resemble-ai",
+            "capabilities": ["speech"],
+            "loaded": loaded.get(name, False),
+        }
+        for name in sorted(KNOWN_MODELS)
+    ]
 
 
 def _wav_to_bytes(wav: torch.Tensor, sample_rate: int) -> bytes:
@@ -79,7 +95,7 @@ async def synthesize(request: Request) -> Response:
             status_code=400,
         )
 
-    # Validate and ensure model is loaded
+    # Validate and ensure model is loaded (lazy loading)
     try:
         model_name = engine.ensure_model(model)
     except ValueError as exc:
@@ -141,8 +157,8 @@ async def synthesize(request: Request) -> Response:
 
 
 async def list_models(request: Request) -> JSONResponse:
-    """Return available model list."""
-    return JSONResponse({"object": "list", "data": AVAILABLE_MODELS})
+    """Return available model list with capabilities and loaded status."""
+    return JSONResponse({"object": "list", "data": _build_model_list()})
 
 
 async def health(request: Request) -> JSONResponse:
@@ -163,10 +179,38 @@ async def health(request: Request) -> JSONResponse:
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    """Preload the default model on startup, release on shutdown."""
-    logger.info("Preloading default model: %s", settings.default_model)
-    engine.load(settings.default_model)
+    """Optionally preload the default model, start idle checker."""
+    idle_task = None
+
+    # Start idle timeout background task if configured
+    if settings.model_idle_timeout > 0:
+
+        async def _idle_checker() -> None:
+            while True:
+                await asyncio.sleep(30)
+                if engine.unload_if_idle(settings.model_idle_timeout):
+                    logger.info(
+                        "Model(s) unloaded due to idle timeout (%ds).",
+                        settings.model_idle_timeout,
+                    )
+
+        idle_task = asyncio.create_task(_idle_checker())
+
+    # Optionally preload default model
+    if settings.default_model:
+        logger.info("Preloading default model: %s", settings.default_model)
+        engine.load(settings.default_model)
+    else:
+        logger.info(
+            "No default model configured — models will be loaded lazily on first request."
+        )
+
     yield
+
+    if idle_task:
+        idle_task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await idle_task
     engine.unload()
 
 

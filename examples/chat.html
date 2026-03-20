@@ -344,7 +344,7 @@ You are a helpful assistant.</textarea
                     type="button"
                     id="record-btn"
                     disabled
-                    title="Hold to record"
+                    title="Click to record, click again to stop"
                 >
                     🎤
                 </button>
@@ -440,6 +440,12 @@ You are a helpful assistant.</textarea
                 }
                 if (prev && [...sel.options].some((o) => o.value === prev))
                     sel.value = prev;
+            }
+
+            /** Check if a model has any of the given capabilities. */
+            function hasCapability(model, ...caps) {
+                const mc = model.capabilities || [];
+                return caps.some((c) => mc.includes(c));
             }
 
             // ── API calls ─────────────────────────────────────────────────
@@ -657,7 +663,7 @@ You are a helpful assistant.</textarea
                 if (wantAudio && !useAudioModality && full) speak(full);
             }
 
-            // ── Recording flow ────────────────────────────────────────────
+            // ── Recording flow (live streaming transcription) ─────────────
 
             async function toggleRecording() {
                 if (recording) {
@@ -676,9 +682,37 @@ You are a helpful assistant.</textarea
                 }
 
                 const chunks = [];
+                let pendingTranscription = null;
+                let lastTranscribeTime = 0;
+                const TRANSCRIBE_INTERVAL_MS = 1500;
+
                 recorder = new MediaRecorder(stream);
+
                 recorder.ondataavailable = (e) => {
                     if (e.data.size) chunks.push(e.data);
+
+                    // Periodically transcribe accumulated audio while recording
+                    const now = Date.now();
+                    if (
+                        !pendingTranscription &&
+                        now - lastTranscribeTime >= TRANSCRIBE_INTERVAL_MS &&
+                        chunks.length > 0
+                    ) {
+                        lastTranscribeTime = now;
+                        const blob = new Blob(chunks, {
+                            type: recorder.mimeType,
+                        });
+                        pendingTranscription = transcribe(blob)
+                            .then((text) => {
+                                if (text && recording) {
+                                    userInput.value = text;
+                                }
+                            })
+                            .catch(() => {})
+                            .finally(() => {
+                                pendingTranscription = null;
+                            });
+                    }
                 };
 
                 recorder.onstop = async () => {
@@ -687,25 +721,44 @@ You are a helpful assistant.</textarea
                     recordBtn.classList.remove("recording");
                     recordBtn.textContent = "🎤";
 
-                    if (!chunks.length) return;
-                    const blob = new Blob(chunks, { type: recorder.mimeType });
-
-                    userInput.value = "Transcribing…";
-                    userInput.disabled = true;
-                    try {
-                        userInput.value = await transcribe(blob);
-                    } catch (e) {
-                        userInput.value = "";
-                        toast(`Transcription failed: ${e.message}`);
+                    // Wait for any in-flight transcription to finish
+                    if (pendingTranscription) {
+                        try {
+                            await pendingTranscription;
+                        } catch {
+                            /* ignore */
+                        }
                     }
-                    userInput.disabled = false;
+
+                    // Final transcription with all accumulated audio
+                    if (chunks.length > 0) {
+                        userInput.placeholder = "Finalizing…";
+                        userInput.disabled = true;
+                        try {
+                            const blob = new Blob(chunks, {
+                                type: recorder.mimeType,
+                            });
+                            userInput.value = await transcribe(blob);
+                        } catch (e) {
+                            if (!userInput.value) {
+                                toast(
+                                    `Transcription failed: ${e.message}`,
+                                );
+                            }
+                        }
+                        userInput.disabled = false;
+                    }
+                    userInput.placeholder = "Type a message…";
                     userInput.focus();
                 };
 
-                recorder.start();
+                // Start recording with 500ms timeslice for frequent data chunks
+                recorder.start(500);
                 recording = true;
                 recordBtn.classList.add("recording");
                 recordBtn.textContent = "⏹";
+                userInput.value = "";
+                userInput.placeholder = "Listening…";
             }
 
             // ── Connect & populate selects ────────────────────────────────
@@ -725,25 +778,29 @@ You are a helpful assistant.</textarea
                     const models = modelsRes.data ?? [];
                     const voices = voicesRes.data ?? [];
 
-                    populateSelect($("#chat-model"), models);
-                    populateSelect($("#tts-model"), models);
-                    populateSelect($("#stt-model"), models);
+                    // Filter models by capability for each dropdown
+                    const chatModels = models.filter((m) =>
+                        hasCapability(m, "chat", "completions"),
+                    );
+                    const ttsModels = models.filter((m) =>
+                        hasCapability(m, "speech"),
+                    );
+                    const sttModels = models.filter((m) =>
+                        hasCapability(m, "transcription"),
+                    );
+
+                    populateSelect($("#chat-model"), chatModels);
+                    populateSelect($("#tts-model"), ttsModels);
+                    populateSelect($("#stt-model"), sttModels);
                     populateSelect($("#tts-voice"), voices, "name");
 
-                    // Auto-select models by heuristic
-                    for (const m of models) {
-                        const id = m.id.toLowerCase();
-                        if (
-                            !$("#chat-model").value &&
-                            !id.includes("whisper") &&
-                            !id.includes("chatterbox")
-                        )
-                            $("#chat-model").value = m.id;
-                        if (!$("#tts-model").value && id.includes("chatterbox"))
-                            $("#tts-model").value = m.id;
-                        if (!$("#stt-model").value && id.includes("whisper"))
-                            $("#stt-model").value = m.id;
-                    }
+                    // Auto-select first model in each category (already filtered)
+                    if (chatModels.length && !$("#chat-model").value)
+                        $("#chat-model").value = chatModels[0].id;
+                    if (ttsModels.length && !$("#tts-model").value)
+                        $("#tts-model").value = ttsModels[0].id;
+                    if (sttModels.length && !$("#stt-model").value)
+                        $("#stt-model").value = sttModels[0].id;
 
                     setReady(true);
                     btn.textContent = "Connected ✓";

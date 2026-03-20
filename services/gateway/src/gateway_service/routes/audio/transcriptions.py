@@ -36,8 +36,13 @@ async def create_transcription(
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
     timestamp_granularities: list[str] | None = Form(None, alias="timestamp_granularities[]"),
+    diarize: str = Form("false"),
 ):
-    """Transcribe audio into text."""
+    """Transcribe audio into text.
+
+    Set ``diarize=true`` to enable speaker diarization (requires
+    ``ENABLE_DIARIZATION=true`` on the backend and a valid ``HF_TOKEN``).
+    """
     client = _get_transcription_client(request)
 
     # Validate response format
@@ -58,9 +63,13 @@ async def create_transcription(
 
     filename = file.filename or "audio.wav"
 
-    # Determine if we need word timestamps based on format / granularity
-    want_words = fmt == TranscriptionResponseFormat.verbose_json or (
-        timestamp_granularities is not None and "word" in timestamp_granularities
+    want_diarize = diarize.lower() == "true"
+
+    # Determine if we need word timestamps based on format / granularity / diarize
+    want_words = (
+        fmt == TranscriptionResponseFormat.verbose_json
+        or (timestamp_granularities is not None and "word" in timestamp_granularities)
+        or want_diarize  # diarization needs word alignment
     )
 
     try:
@@ -72,6 +81,7 @@ async def create_transcription(
             prompt=prompt,
             temperature=temperature,
             word_timestamps=want_words,
+            diarize=want_diarize,
         )
     except HTTPException:
         raise

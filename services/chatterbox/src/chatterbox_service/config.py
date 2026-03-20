@@ -19,14 +19,17 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
 
-    # Which model to preload at startup (others loaded on demand)
-    default_model: str = "chatterbox-turbo"
+    # Which model to preload at startup (empty string = lazy load all)
+    default_model: str = ""
 
     # Directory containing named voice reference .wav files
     voices_dir: Path = Path("/app/voices")
 
     # HuggingFace model cache directory (mounted from host)
     model_cache_dir: Path = Path("/root/.cache/huggingface")
+
+    # Idle timeout: unload models after N seconds of inactivity (0 = disabled)
+    model_idle_timeout: int = 0
 
     model_config = {"env_prefix": "", "case_sensitive": False}
 

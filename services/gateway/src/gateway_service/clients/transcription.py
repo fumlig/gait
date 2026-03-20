@@ -39,6 +39,7 @@ class TranscriptionClient:
         prompt: str | None,
         temperature: float,
         word_timestamps: bool,
+        diarize: bool = False,
     ) -> TranscriptionResult:
         """Forward a transcription request as multipart form data."""
         return await self._stt_request(
@@ -50,6 +51,7 @@ class TranscriptionClient:
             prompt=prompt,
             temperature=temperature,
             word_timestamps=word_timestamps,
+            diarize=diarize,
         )
 
     async def translate(
@@ -112,6 +114,7 @@ class TranscriptionClient:
         prompt: str | None = None,
         temperature: float = 0.0,
         word_timestamps: bool = False,
+        diarize: bool = False,
     ) -> TranscriptionResult:
         """Send a multipart form request to the backend STT service.
 
@@ -125,6 +128,7 @@ class TranscriptionClient:
             "model": model,
             "temperature": str(temperature),
             "word_timestamps": str(word_timestamps).lower(),
+            "diarize": str(diarize).lower(),
         }
         if language is not None:
             data["language"] = language

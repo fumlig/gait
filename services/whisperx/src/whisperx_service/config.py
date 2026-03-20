@@ -20,8 +20,8 @@ class Settings(BaseSettings):
     port: int = 8000
     device: str = "cuda"
 
-    # Model defaults
-    default_model: str = "large-v3"
+    # Model defaults (empty string = lazy load all)
+    default_model: str = ""
     compute_type: str = "float16"
     batch_size: int = 16
 
@@ -33,6 +33,9 @@ class Settings(BaseSettings):
 
     # Limits
     max_file_size: int = 25 * 1024 * 1024  # 25 MB (OpenAI limit)
+
+    # Idle timeout: unload models after N seconds of inactivity (0 = disabled)
+    model_idle_timeout: int = 0
 
 
 settings = Settings()

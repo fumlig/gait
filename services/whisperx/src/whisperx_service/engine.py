@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
+import time
 from typing import Any
 
 import torch
@@ -41,6 +42,7 @@ class WhisperXEngine:
         self._model_name: str | None = None
         self._align_models: dict[str, tuple[Any, Any]] = {}  # lang -> (model, metadata)
         self._diarize_pipeline: Any = None
+        self._last_used: float = 0.0
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -51,6 +53,10 @@ class WhisperXEngine:
         import whisperx
 
         name = model_name or settings.default_model
+        if not name:
+            logger.info("No model name specified, skipping load.")
+            return
+
         logger.info(
             "Loading WhisperX model=%s device=%s compute_type=%s ...",
             name,
@@ -63,6 +69,7 @@ class WhisperXEngine:
             compute_type=settings.compute_type,
         )
         self._model_name = name
+        self.touch()
         logger.info("WhisperX model loaded: %s", name)
 
     def unload(self) -> None:
@@ -97,23 +104,58 @@ class WhisperXEngine:
         return self._model_name
 
     # ------------------------------------------------------------------
+    # Idle tracking
+    # ------------------------------------------------------------------
+
+    def touch(self) -> None:
+        """Record that the engine was just used (reset idle timer)."""
+        self._last_used = time.monotonic()
+
+    def idle_seconds(self) -> float:
+        """Return the number of seconds since last use, or 0 if never used."""
+        if not self.is_loaded or self._last_used == 0.0:
+            return 0.0
+        return time.monotonic() - self._last_used
+
+    def unload_if_idle(self, timeout: float) -> bool:
+        """Unload all models if idle longer than *timeout* seconds.
+
+        Returns True if models were unloaded.
+        """
+        if timeout <= 0 or not self.is_loaded:
+            return False
+        if self.idle_seconds() >= timeout:
+            logger.info(
+                "Idle for %.0fs (timeout=%ds), unloading models.",
+                self.idle_seconds(),
+                timeout,
+            )
+            self.unload()
+            return True
+        return False
+
+    # ------------------------------------------------------------------
     # Model name resolution
     # ------------------------------------------------------------------
 
     def _resolve_model_name(self, name: str) -> str:
         """Map OpenAI-compatible aliases to actual whisper model names."""
         if name == "whisper-1":
-            return settings.default_model
+            return settings.default_model or "large-v3"
         if name in WHISPER_MODEL_SIZES:
             return name
         # Allow pass-through for custom model paths/names
         return name
 
     def list_available_models(self) -> list[str]:
-        """Return model IDs that this service reports as available."""
+        """Return model IDs that this service reports as available.
+
+        Returns all known model sizes plus the OpenAI alias.
+        """
         models = ["whisper-1"]
-        if self._model_name and self._model_name not in models:
-            models.append(self._model_name)
+        for size in sorted(WHISPER_MODEL_SIZES):
+            if size not in models:
+                models.append(size)
         return models
 
     # ------------------------------------------------------------------
@@ -187,6 +229,8 @@ class WhisperXEngine:
 
         if self._model is None:
             raise RuntimeError("Model not loaded -- call load() first")
+
+        self.touch()
 
         # Write audio bytes to a temporary file for whisperx
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:

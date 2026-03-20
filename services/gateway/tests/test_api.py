@@ -8,6 +8,7 @@ Clients are attached directly to ``app.state``.
 from __future__ import annotations
 
 import json
+import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
@@ -33,16 +34,36 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 CHATTERBOX_MODELS = [
-    ModelObject(id="chatterbox-turbo", owned_by="resemble-ai"),
+    ModelObject(
+        id="chatterbox-turbo",
+        owned_by="resemble-ai",
+        capabilities=["speech"],
+        loaded=True,
+    ),
 ]
 
 WHISPERX_MODELS = [
-    ModelObject(id="whisper-1", owned_by="whisperx"),
-    ModelObject(id="large-v3", owned_by="whisperx"),
+    ModelObject(
+        id="whisper-1",
+        owned_by="whisperx",
+        capabilities=["transcription", "translation"],
+        loaded=True,
+    ),
+    ModelObject(
+        id="large-v3",
+        owned_by="whisperx",
+        capabilities=["transcription", "translation"],
+        loaded=True,
+    ),
 ]
 
 LLAMACPP_MODELS = [
-    ModelObject(id="my-model", owned_by="llamacpp"),
+    ModelObject(
+        id="my-model",
+        owned_by="llamacpp",
+        capabilities=["chat", "completions", "embeddings"],
+        loaded=True,
+    ),
 ]
 
 ALL_MODELS = CHATTERBOX_MODELS + WHISPERX_MODELS + LLAMACPP_MODELS
@@ -288,6 +309,7 @@ def app(speech_client, transcription_client, voice_client, chat_client):
     test_app.state.voice_client = voice_client
     test_app.state.chat_client = chat_client
     test_app.state.models = ALL_MODELS
+    test_app.state.models_fetched_at = time.monotonic()
 
     return test_app
 
@@ -345,6 +367,25 @@ async def test_list_models_merged(client: AsyncClient):
     assert "my-model" in model_ids
 
 
+async def test_list_models_capabilities(client: AsyncClient):
+    """Gateway models include capabilities."""
+    resp = await client.get("/v1/models")
+    data = resp.json()
+    by_id = {m["id"]: m for m in data["data"]}
+    assert "speech" in by_id["chatterbox-turbo"]["capabilities"]
+    assert "transcription" in by_id["whisper-1"]["capabilities"]
+    assert "chat" in by_id["my-model"]["capabilities"]
+    assert "embeddings" in by_id["my-model"]["capabilities"]
+
+
+async def test_list_models_loaded_status(client: AsyncClient):
+    """Gateway models include loaded status."""
+    resp = await client.get("/v1/models")
+    data = resp.json()
+    for m in data["data"]:
+        assert "loaded" in m
+
+
 async def test_list_models_empty_when_no_models():
     """Gateway returns an empty list when no models were discovered."""
     from fastapi import FastAPI
@@ -359,6 +400,7 @@ async def test_list_models_empty_when_no_models():
     test_app.include_router(models.router)
     # No models on state
     test_app.state.models = []
+    test_app.state.models_fetched_at = time.monotonic()
 
     transport = ASGITransport(app=test_app)
     async with AsyncClient(transport=transport, base_url="http://test") as c:
@@ -533,6 +575,20 @@ async def test_transcription_invalid_format(client: AsyncClient):
     )
     assert resp.status_code == 400
     assert "Invalid response_format" in resp.json()["detail"]
+
+
+async def test_transcription_diarize(client: AsyncClient, transcription_client: AsyncMock):
+    """Transcription with diarize=true passes through to the backend."""
+    resp = await client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("test.wav", b"fake-wav", "audio/wav")},
+        data={"model": "whisper-1", "response_format": "verbose_json", "diarize": "true"},
+    )
+    assert resp.status_code == 200
+    call_kwargs = transcription_client.transcribe.call_args.kwargs
+    assert call_kwargs["diarize"] is True
+    # Diarization forces word_timestamps
+    assert call_kwargs["word_timestamps"] is True
 
 
 async def test_transcription_empty_file(client: AsyncClient):

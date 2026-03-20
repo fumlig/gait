@@ -19,3 +19,5 @@
 - Turn the voice backend into its own service (that is just a file store). Provide access to the same volume to the chatterbox service.
 - Add `ty` for typechecking
 - Implement language model (Qwen3.5)
+
+- Script to clean up voice sample and prepare it for use using ffmpeg (remove silence, normalize volume, filter out background noise,etc.)

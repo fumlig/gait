@@ -95,19 +95,18 @@ def _wait_for_gateway():
 
 
 @pytest.fixture(scope="session")
-def models(client: OpenAI) -> dict[str, list[str]]:
-    """Fetch model list once and categorise by kind."""
-    resp = client.models.list()
-    ids = [m.id for m in resp.data]
+def models(raw_client: httpx.Client) -> dict[str, list[str]]:
+    """Fetch model list once and categorise by capabilities."""
+    r = raw_client.get("/v1/models")
+    data = r.json()["data"]
+    ids = [m["id"] for m in data]
+    caps = {m["id"]: m.get("capabilities", []) for m in data}
+
     return {
         "all": ids,
-        "tts": [i for i in ids if "chatterbox" in i.lower() or "tts" in i.lower()],
-        "stt": [i for i in ids if "whisper" in i.lower() or "large" in i.lower()],
-        "llm": [
-            i
-            for i in ids
-            if not any(k in i.lower() for k in ("chatterbox", "tts", "whisper", "large"))
-        ],
+        "tts": [i for i in ids if "speech" in caps.get(i, [])],
+        "stt": [i for i in ids if "transcription" in caps.get(i, [])],
+        "llm": [i for i in ids if "chat" in caps.get(i, [])],
     }
 
 
@@ -146,6 +145,17 @@ class TestModels:
 
     def test_has_stt_model(self, models: dict):
         assert len(models["stt"]) > 0, "No STT model found"
+
+    def test_models_have_capabilities(self, raw_client: httpx.Client):
+        """Every model has a non-empty capabilities list."""
+        r = raw_client.get("/v1/models")
+        assert r.status_code == 200
+        data = r.json()
+        _save("models_capabilities.json", json.dumps(data, indent=2))
+        for m in data["data"]:
+            assert "capabilities" in m, f"Model {m['id']} missing capabilities"
+            assert len(m["capabilities"]) > 0, f"Model {m['id']} has empty capabilities"
+            assert "loaded" in m, f"Model {m['id']} missing loaded field"
 
 
 # ---------------------------------------------------------------------------
@@ -318,6 +328,35 @@ class TestTranscription:
         _save("transcription.vtt", r.text)
         assert r.text.startswith("WEBVTT")
         assert "-->" in r.text
+
+    def test_transcription_diarize(
+        self, models: dict, tts_audio_wav: bytes, raw_client: httpx.Client
+    ):
+        """Transcribe with diarization enabled.
+
+        If the server has ENABLE_DIARIZATION=true and a valid HF_TOKEN,
+        the response segments should contain speaker labels.  If diarization
+        is not configured, the transcription still succeeds without speakers.
+        """
+        stt_model = models["stt"][0]
+        r = raw_client.post(
+            "/v1/audio/transcriptions",
+            data={
+                "model": stt_model,
+                "response_format": "verbose_json",
+                "diarize": "true",
+            },
+            files={"file": ("speech.wav", tts_audio_wav, "audio/wav")},
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save("transcription_diarize.json", json.dumps(data, indent=2))
+
+        assert data["task"] == "transcribe"
+        assert len(data["segments"]) > 0
+        assert len(data["text"]) > 0
+        # Word-level timestamps should be present (diarization forces them)
+        assert len(data["words"]) > 0
 
     def test_transcription_with_language(
         self, client: OpenAI, models: dict, tts_audio_wav: bytes

@@ -81,9 +81,14 @@ def mock_engine():
     with patch("whisperx_service.engine.engine") as eng:
         eng.is_loaded = True
         eng.loaded_model_name = "large-v3"
-        eng.list_available_models.return_value = ["whisper-1", "large-v3"]
+        eng.list_available_models.return_value = [
+            "whisper-1", "base", "base.en", "large", "large-v1", "large-v2",
+            "large-v3", "medium", "medium.en", "small", "small.en", "tiny",
+            "tiny.en", "turbo",
+        ]
         eng.ensure_model.return_value = None
         eng.transcribe.return_value = MOCK_RESULT
+        eng.touch.return_value = None
         # Also patch the engine used in app.py
         with patch("whisperx_service.app.engine", eng):
             yield eng
@@ -130,6 +135,7 @@ async def test_health(client: AsyncClient):
     data = resp.json()
     assert data["status"] == "ok"
     assert data["model_loaded"] is True
+    assert data["loaded_model"] == "large-v3"
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +148,43 @@ async def test_list_models(client: AsyncClient):
     assert resp.status_code == 200
     data = resp.json()
     assert data["object"] == "list"
-    assert len(data["data"]) == 2
+    assert len(data["data"]) >= 2
     model_ids = [m["id"] for m in data["data"]]
     assert "whisper-1" in model_ids
+    assert "large-v3" in model_ids
+
+
+async def test_list_models_capabilities(client: AsyncClient):
+    """Models endpoint returns capabilities for each model."""
+    resp = await client.get("/models")
+    data = resp.json()
+    for model in data["data"]:
+        assert "capabilities" in model
+        assert "transcription" in model["capabilities"]
+        assert "translation" in model["capabilities"]
+
+
+async def test_list_models_loaded_status(client: AsyncClient):
+    """Models endpoint shows loaded status based on current model."""
+    resp = await client.get("/models")
+    data = resp.json()
+    by_id = {m["id"]: m for m in data["data"]}
+    # whisper-1 alias should show as loaded when any model is loaded
+    assert by_id["whisper-1"]["loaded"] is True
+    # The actual loaded model should show as loaded
+    assert by_id["large-v3"]["loaded"] is True
+    # Other models should not be loaded
+    assert by_id["tiny"]["loaded"] is False
+
+
+async def test_list_models_all_known_sizes(client: AsyncClient):
+    """All known whisper model sizes are listed."""
+    resp = await client.get("/models")
+    data = resp.json()
+    model_ids = {m["id"] for m in data["data"]}
+    assert "tiny" in model_ids
+    assert "large-v3" in model_ids
+    assert "turbo" in model_ids
 
 
 # ---------------------------------------------------------------------------
@@ -193,6 +233,48 @@ async def test_transcribe_with_word_timestamps(client: AsyncClient, mock_engine:
     assert resp.status_code == 200
     call_kwargs = mock_engine.transcribe.call_args
     assert call_kwargs.kwargs["word_timestamps"] is True
+
+
+async def test_transcribe_with_diarize(client: AsyncClient, mock_engine: MagicMock):
+    """diarize=true should be passed to engine and force word_timestamps."""
+    from whisperx_service.config import settings
+
+    original = settings.enable_diarization
+    settings.enable_diarization = True
+    try:
+        wav = _make_wav_bytes()
+        resp = await client.post(
+            "/transcribe",
+            files={"file": ("test.wav", wav, "audio/wav")},
+            data={"model": "whisper-1", "diarize": "true"},
+        )
+        assert resp.status_code == 200
+        call_kwargs = mock_engine.transcribe.call_args
+        assert call_kwargs.kwargs["diarize"] is True
+        # Diarization forces word timestamps on
+        assert call_kwargs.kwargs["word_timestamps"] is True
+    finally:
+        settings.enable_diarization = original
+
+
+async def test_transcribe_diarize_without_config(client: AsyncClient, mock_engine: MagicMock):
+    """diarize=true is ignored when enable_diarization is false in config."""
+    from whisperx_service.config import settings
+
+    original = settings.enable_diarization
+    settings.enable_diarization = False
+    try:
+        wav = _make_wav_bytes()
+        resp = await client.post(
+            "/transcribe",
+            files={"file": ("test.wav", wav, "audio/wav")},
+            data={"model": "whisper-1", "diarize": "true"},
+        )
+        assert resp.status_code == 200
+        call_kwargs = mock_engine.transcribe.call_args
+        assert call_kwargs.kwargs["diarize"] is False
+    finally:
+        settings.enable_diarization = original
 
 
 async def test_transcribe_empty_file(client: AsyncClient):
