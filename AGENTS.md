@@ -130,8 +130,10 @@ trave/
 - Use `ARG` for build-time configurability (Python version, CUDA version).
 - Use `ENV` with defaults for runtime configurability (port, host, device).
 - The `CMD` should reference env vars so they can be overridden at runtime.
-- Layer caching: copy `pyproject.toml` and `uv sync` before copying source.
+- Layer caching: copy `pyproject.toml` **and `uv.lock`** first, then `uv sync --frozen` before copying source.
+- Use `--mount=type=cache,target=/root/.cache/uv` on all `RUN uv sync` steps to persist the download cache across builds.
 - Include `curl` in the image for healthcheck.
+- The root `.dockerignore` excludes `.venv/`, `.git/`, tests, and other dev artifacts from the build context.
 
 ### docker-compose.yml
 - Only the gateway exposes a host port (`GATEWAY_PORT`). Backend services communicate over the internal Docker network.
@@ -237,3 +239,39 @@ Each service has its own `.venv/`. Point your IDE's Python interpreter to the se
 - `.venv/` directories are gitignored. Always run `uv sync --all-extras` after cloning.
 - Do not use the system Python directly. The system may run a different version (e.g. 3.14) which will cause import or build failures.
 - If a `.venv` was created with the wrong Python version, delete it and re-run `uv sync --all-extras`.
+
+## Hosting as a self-hosted service
+
+The stack is designed to run locally as a persistent service that survives reboots.
+
+### Systemd integration
+A `trave.service` unit file is provided in the repo root. Install it once:
+```bash
+sudo cp trave.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Enable (auto-start on boot):
+```bash
+sudo systemctl enable trave
+```
+
+Disable (stop auto-starting on boot):
+```bash
+sudo systemctl disable trave
+```
+
+Manual start/stop/status:
+```bash
+sudo systemctl start trave
+sudo systemctl stop trave
+systemctl status trave
+```
+
+The unit uses `docker compose up -d --wait` which blocks until all healthchecks pass, and `docker compose down` for clean shutdown. `TimeoutStartSec=600` gives enough time for first-run model downloads.
+
+### Docker build caching
+- A root `.dockerignore` excludes `.venv/` directories (13+ GB), `.git/`, test files, and other artifacts from the build context.
+- Dockerfiles use `--mount=type=cache,target=/root/.cache/uv` so uv's download cache persists across builds. Rebuilds after source-only changes skip all dependency downloads.
+- `uv.lock` is copied alongside `pyproject.toml` and `--frozen` is passed to `uv sync`, ensuring reproducible, faster resolution without re-solving.
+- BuildKit is required (default with Docker Compose v2 / Docker Engine 23+).

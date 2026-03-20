@@ -30,13 +30,15 @@ ENV HOST=0.0.0.0 \
     DEVICE=cuda \
     DEFAULT_MODEL=chatterbox-turbo
 
-# Copy project metadata first for layer caching
-COPY services/chatterbox/pyproject.toml ./
-RUN uv sync --no-dev --no-install-project
+# Copy project metadata + lock file first for layer caching
+COPY services/chatterbox/pyproject.toml services/chatterbox/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --no-install-project --frozen
 
 # Copy application source
 COPY services/chatterbox/src/ src/
-RUN uv sync --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --frozen
 
 EXPOSE ${PORT}
 

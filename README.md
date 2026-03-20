@@ -129,6 +129,70 @@ Global settings via environment variables or a `.env` file in the repo root:
 
 Per-service configuration is documented in each service's README.
 
+## Self-hosting
+
+The stack is designed to run as a persistent local service that starts on boot and survives reboots.
+
+### Systemd setup
+
+A `trave.service` unit file is provided in the repo root. Install it once:
+
+```bash
+sudo cp trave.service /etc/systemd/system/
+sudo systemctl daemon-reload
+```
+
+Before enabling, edit `WorkingDirectory` in the unit file if your checkout isn't at `/home/oskar/projects/trave`.
+
+**Enable** auto-start on boot:
+
+```bash
+sudo systemctl enable trave
+```
+
+**Disable** auto-start on boot (containers won't launch on next reboot):
+
+```bash
+sudo systemctl disable trave
+```
+
+**Start / stop / check status:**
+
+```bash
+sudo systemctl start trave     # brings up all containers, waits for healthchecks
+sudo systemctl stop trave      # tears down all containers
+systemctl status trave         # quick status
+journalctl -u trave -f         # follow logs
+```
+
+The unit uses `docker compose up -d --wait` (blocks until all healthchecks pass) and `docker compose down` for clean shutdown. `TimeoutStartSec=600` gives enough headroom for first-run model downloads.
+
+### Rebuilding after updates
+
+```bash
+# pull latest code, then rebuild and restart
+git pull
+docker compose up --build -d
+```
+
+Or via systemd:
+
+```bash
+git pull
+docker compose build
+sudo systemctl restart trave
+```
+
+### Build caching
+
+Docker builds are optimised for fast rebuilds:
+
+- A root `.dockerignore` keeps the build context small (excludes `.venv/`, `.git/`, tests).
+- Dependency installation is cached via BuildKit cache mounts — only the first build downloads wheels; subsequent rebuilds reuse them even after a layer cache miss.
+- `uv.lock` files are copied into the image and `uv sync --frozen` is used, so dependency resolution is instant and reproducible.
+
+Source-only changes (no new deps) rebuild in seconds.
+
 ## Project structure
 
 ```

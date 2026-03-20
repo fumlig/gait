@@ -21,13 +21,15 @@ ENV HOST=0.0.0.0 \
     VOICES_DIR=/app/voices \
     BACKEND_TIMEOUT=300
 
-# Copy project metadata first for layer caching
-COPY services/gateway/pyproject.toml ./
-RUN uv sync --no-dev --no-install-project
+# Copy project metadata + lock file first for layer caching
+COPY services/gateway/pyproject.toml services/gateway/uv.lock ./
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --no-install-project --frozen
 
 # Copy application source
 COPY services/gateway/src/ src/
-RUN uv sync --no-dev
+RUN --mount=type=cache,target=/root/.cache/uv \
+    uv sync --no-dev --frozen
 
 EXPOSE ${PORT}
 
