@@ -7,7 +7,7 @@
 - Better READMEs. Less fluff, clear disclaimer about using agents.
 - Create API docs (maybe in using FastAPI gateway) that follow OpenAI API structure. If possible we can maybe merge 
 - Make sure volumes and other things that may be used by several services are put in the root
-- Integration tests using OpenAI API client
+- Integration tests using OpenAI API client and validation of outputs using real services
 - Make sure docker builds are as fast and small as possible by utilizing caching layers
 
 - Make backend services even thinner and have them accept kwargs over http. THe gateway is configured with all of it so that it can be overriden per request as well!

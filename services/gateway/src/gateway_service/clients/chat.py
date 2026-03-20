@@ -94,6 +94,25 @@ class ChatClient:
             logger.warning("Failed to fetch models from chat backend (%s)", url, exc_info=True)
             return []
 
+    async def stream_raw(self, path: str, body: dict) -> httpx.Response:
+        """Forward a JSON request and return the raw streaming httpx response.
+
+        Unlike ``forward_stream``, the caller receives the raw ``httpx.Response``
+        for custom processing (e.g. interleaving audio).  The caller **must**
+        close the response when done (typically via ``await resp.aclose()``
+        in a ``finally`` block).
+        """
+        url = f"{self._base_url}{path}"
+        req = self._client.build_request("POST", url, json=body)
+        resp = await self._client.send(req, stream=True)
+
+        if resp.status_code != 200:
+            await resp.aread()
+            detail = resp.text or f"Backend returned HTTP {resp.status_code}"
+            raise HTTPException(status_code=resp.status_code, detail=detail)
+
+        return resp
+
     async def health(self) -> dict:
         """Check GET /health on the backend."""
         url = f"{self._base_url}/health"

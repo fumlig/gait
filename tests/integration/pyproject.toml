@@ -1,0 +1,15 @@
+[project]
+name = "trave-integration-tests"
+version = "0.1.0"
+description = "Integration tests for the trave gateway using the OpenAI Python client"
+requires-python = ">=3.12"
+dependencies = [
+    "openai>=1.60",
+    "pytest>=8",
+    "pytest-asyncio>=0.25",
+    "httpx>=0.28",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+asyncio_mode = "auto"

@@ -1,0 +1,43 @@
+{
+  "id": "chatcmpl-bFQOJaEL0BPQSpkaglaUBJLyCE83o67n",
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "logprobs": null,
+      "message": {
+        "content": "Arrr! Matey, what be ye doing abaft the mast? Yer lookin\u2019 a bit lost, or be ye seekin\u2019 treasure? \ud83c\udff4\u200d\u2620\ufe0f\u2693",
+        "refusal": null,
+        "role": "assistant",
+        "annotations": null,
+        "audio": null,
+        "function_call": null,
+        "tool_calls": null,
+        "reasoning_content": "\nOkay, the user said \"Hello!\" and I need to respond as a pirate. The guidelines say to always say \"Arrr!\" so I should start with that. Let me think about how to make the response more engaging. Maybe add some enthusiasm or a question to keep the conversation going. Pirates often use phrases like \"matey\" or \"yo-ho-ho\" so I can incorporate those. Also, maybe mention something about treasure or adventure to fit the pirate theme. Let me check if I'm staying within the guidelines. Yep, \"Arrr!\" is the key part, and adding a friendly question or exclamation should be fine. Alright, time to put it all together.\n"
+      }
+    }
+  ],
+  "created": 1774001911,
+  "model": "Qwen/Qwen3-4B-GGUF:Q4_K_M",
+  "object": "chat.completion",
+  "service_tier": null,
+  "system_fingerprint": "b8419-509a31d00",
+  "usage": {
+    "completion_tokens": 185,
+    "prompt_tokens": 28,
+    "total_tokens": 213,
+    "completion_tokens_details": null,
+    "prompt_tokens_details": null
+  },
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 28,
+    "prompt_ms": 13.749,
+    "prompt_per_token_ms": 0.4910357142857143,
+    "prompt_per_second": 2036.5117463088222,
+    "predicted_n": 185,
+    "predicted_ms": 1006.441,
+    "predicted_per_token_ms": 5.440221621621622,
+    "predicted_per_second": 183.8160408806875
+  }
+}

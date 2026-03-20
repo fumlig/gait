@@ -1,0 +1,13 @@
+{
+  "object": "list",
+  "data": [
+    {
+      "voice_id": "default",
+      "name": "default"
+    },
+    {
+      "voice_id": "integration_test_voice",
+      "name": "integration_test_voice"
+    }
+  ]
+}

@@ -159,6 +159,38 @@ def _format_timestamp_vtt(seconds: float) -> str:
 # ---------------------------------------------------------------------------
 
 
+def wav_to_pcm16(wav_bytes: bytes, target_sr: int = 24000) -> tuple[bytes, int]:
+    """Convert WAV bytes to raw PCM16 mono at a target sample rate.
+
+    Returns ``(pcm_bytes, sample_rate)``.  If the source WAV is already 16-bit
+    mono at the target rate, the raw frames are returned directly.  Otherwise
+    pydub (via ffmpeg) handles resampling, channel conversion, and format
+    conversion (e.g. 32-bit float WAV → 16-bit PCM).
+    """
+    import wave
+
+    try:
+        buf = io.BytesIO(wav_bytes)
+        with wave.open(buf, "rb") as wf:
+            sr = wf.getframerate()
+            channels = wf.getnchannels()
+            sample_width = wf.getsampwidth()
+            frames = wf.readframes(wf.getnframes())
+
+        if sample_width == 2 and channels == 1 and sr == target_sr:
+            return frames, sr
+    except wave.Error:
+        # Python's wave module only supports PCM (format tag 1).
+        # Float WAV (format tag 3) and other variants fall through to pydub.
+        pass
+
+    from pydub import AudioSegment
+
+    segment = AudioSegment.from_wav(io.BytesIO(wav_bytes))
+    segment = segment.set_channels(1).set_frame_rate(target_sr).set_sample_width(2)
+    return segment.raw_data, target_sr
+
+
 def wav_to_mp3(wav_bytes: bytes) -> bytes:
     """Convert WAV bytes to MP3 bytes using pydub (requires ffmpeg)."""
     from pydub import AudioSegment

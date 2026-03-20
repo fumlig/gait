@@ -1,0 +1,21 @@
+{
+  "text_tokens": [
+    "Hello",
+    "!",
+    " How",
+    " can",
+    " I",
+    " assist",
+    " you",
+    " today",
+    "?"
+  ],
+  "reasoning_tokens_count": 133,
+  "audio_chunks_count": 32,
+  "audio_transcripts": [
+    "Hello!",
+    "How can I assist you today?"
+  ],
+  "got_audio_id": true,
+  "got_expires": true
+}

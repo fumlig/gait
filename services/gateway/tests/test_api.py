@@ -7,6 +7,7 @@ Clients are attached directly to ``app.state``.
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 from unittest.mock import AsyncMock
@@ -815,6 +816,224 @@ async def test_chat_completions_backend_unavailable(
         },
     )
     assert resp.status_code == 502
+
+
+# ---------------------------------------------------------------------------
+# Chat with audio modality
+# ---------------------------------------------------------------------------
+
+
+def _make_wav_24k(num_samples: int = 100) -> bytes:
+    """Build a minimal 24 kHz / 16-bit / mono WAV for testing."""
+    import struct
+
+    data_size = num_samples * 2
+    file_size = 36 + data_size
+    header = struct.pack(
+        "<4sI4s4sIHHIIHH4sI",
+        b"RIFF",
+        file_size,
+        b"WAVE",
+        b"fmt ",
+        16,
+        1,  # PCM
+        1,  # mono
+        24000,
+        24000 * 2,  # byte rate
+        2,  # block align
+        16,  # bits per sample
+        b"data",
+        data_size,
+    )
+    return header + (b"\x00\x00" * num_samples)
+
+
+class _MockStreamResponse:
+    """Mimics the subset of ``httpx.Response`` used by ``_chat_with_audio``."""
+
+    def __init__(self, lines: list[str]) -> None:
+        self._lines = lines
+
+    async def aiter_lines(self):
+        for line in self._lines:
+            yield line
+
+    async def aclose(self) -> None:
+        pass
+
+
+def _sse_chunk(content: str, *, role: bool = False) -> str:
+    """Build a single SSE line the way llama.cpp would emit it."""
+    delta = {"role": "assistant"} if role else {"content": content}
+    obj = {
+        "id": "chatcmpl-test",
+        "object": "chat.completion.chunk",
+        "created": 1700000000,
+        "model": "my-model",
+        "choices": [{"index": 0, "delta": delta, "finish_reason": None}],
+    }
+    return f"data: {json.dumps(obj)}"
+
+
+# Tokens chosen so that "!" + " How" triggers a sentence boundary.
+_AUDIO_SSE_LINES: list[str] = [
+    _sse_chunk("", role=True),
+    "",
+    _sse_chunk("Hello"),
+    "",
+    _sse_chunk("!"),
+    "",
+    _sse_chunk(" How"),
+    "",
+    _sse_chunk(" are"),
+    "",
+    _sse_chunk(" you"),
+    "",
+    _sse_chunk("?"),
+    "",
+    "data: [DONE]",
+]
+
+
+async def test_chat_audio_stream(
+    client: AsyncClient, chat_client: AsyncMock, speech_client: AsyncMock
+):
+    """Streaming with audio modality interleaves text and audio SSE events."""
+    import json as _json
+
+    wav_24k = _make_wav_24k(100)
+    speech_client.synthesize.return_value = (wav_24k, "audio/wav")
+    chat_client.stream_raw.return_value = _MockStreamResponse(_AUDIO_SSE_LINES)
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+            "modalities": ["text", "audio"],
+            "audio": {"voice": "default", "format": "pcm16"},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    text_tokens: list[str] = []
+    audio_data_chunks: list[str] = []
+    audio_transcripts: list[str] = []
+    audio_id: str | None = None
+    got_expires = False
+
+    for raw_event in resp.text.strip().split("\n\n"):
+        for line in raw_event.split("\n"):
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                continue
+            data = _json.loads(payload)
+            delta = data["choices"][0]["delta"]
+            if "content" in delta:
+                text_tokens.append(delta["content"])
+            if "audio" in delta:
+                audio = delta["audio"]
+                if "id" in audio:
+                    audio_id = audio["id"]
+                if "data" in audio:
+                    audio_data_chunks.append(audio["data"])
+                if "transcript" in audio:
+                    audio_transcripts.append(audio["transcript"])
+                if "expires_at" in audio:
+                    got_expires = True
+
+    # All text tokens forwarded.
+    assert text_tokens == ["Hello", "!", " How", " are", " you", "?"]
+
+    # Audio metadata present.
+    assert audio_id is not None
+    assert got_expires
+
+    # Two synthesis calls: "Hello!" (sentence boundary) and "How are you?" (flush).
+    assert speech_client.synthesize.call_count == 2
+    assert len(audio_data_chunks) > 0
+    assert audio_transcripts == ["Hello!", "How are you?"]
+
+
+async def test_chat_audio_requires_stream(client: AsyncClient, chat_client: AsyncMock):
+    """Audio modality without stream=true returns 400."""
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "modalities": ["text", "audio"],
+            "audio": {"voice": "default"},
+        },
+    )
+    assert resp.status_code == 400
+    assert "stream" in resp.json()["detail"].lower()
+
+
+async def test_chat_audio_no_speech_backend(client: AsyncClient, chat_client: AsyncMock):
+    """Audio modality returns 503 when no speech client is configured."""
+    client._transport.app.state.speech_client = None  # type: ignore[union-attr]
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+            "modalities": ["text", "audio"],
+            "audio": {"voice": "default"},
+        },
+    )
+    assert resp.status_code == 503
+
+
+async def test_chat_audio_synthesis_failure_continues(
+    client: AsyncClient, chat_client: AsyncMock, speech_client: AsyncMock
+):
+    """Text streaming continues even when audio synthesis fails."""
+    import json as _json
+
+    speech_client.synthesize.side_effect = ConnectionError("TTS down")
+    chat_client.stream_raw.return_value = _MockStreamResponse(_AUDIO_SSE_LINES)
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "stream": True,
+            "modalities": ["text", "audio"],
+            "audio": {"voice": "default", "format": "pcm16"},
+        },
+    )
+
+    assert resp.status_code == 200
+
+    text_tokens: list[str] = []
+    audio_data_chunks: list[str] = []
+
+    for raw_event in resp.text.strip().split("\n\n"):
+        for line in raw_event.split("\n"):
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                continue
+            data = _json.loads(payload)
+            delta = data["choices"][0]["delta"]
+            if "content" in delta:
+                text_tokens.append(delta["content"])
+            if "audio" in delta and "data" in delta["audio"]:
+                audio_data_chunks.append(delta["audio"]["data"])
+
+    # Text still streamed even though TTS failed.
+    assert text_tokens == ["Hello", "!", " How", " are", " you", "?"]
+    # No audio data because synthesis raised.
+    assert audio_data_chunks == []
 
 
 # ---------------------------------------------------------------------------
