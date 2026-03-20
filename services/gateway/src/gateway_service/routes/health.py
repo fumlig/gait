@@ -1,5 +1,3 @@
-"""GET /health -- gateway and backend health checks."""
-
 from __future__ import annotations
 
 import logging
@@ -19,7 +17,6 @@ router = APIRouter()
 
 @router.get("/health", response_model=GatewayHealthResponse)
 async def health(request: Request) -> GatewayHealthResponse:
-    """Report gateway health and status of each backend."""
     backends: list[BaseBackend] = getattr(request.app.state, "backends", [])
 
     backend_status: dict[str, str] = {}

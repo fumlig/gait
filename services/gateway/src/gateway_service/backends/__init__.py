@@ -1,12 +1,8 @@
-"""Backend modules for communicating with backend services.
+"""Backend client registry.
 
-Each backend class declares an ``env_var`` and a ``create`` classmethod.
-At startup the gateway checks ``os.environ`` for each class's env var
-and calls ``create`` to instantiate only those whose variable is set.
-
-Which ``app.state`` slots a backend fills is determined by the resource
-protocols it implements (see :pymod:`gateway_service.protocols`),
-discovered automatically via ``isinstance`` checks.
+Each backend class declares an env_var and a create classmethod. At startup
+the gateway checks os.environ for each class's env var and calls create to
+instantiate only those whose variable is set.
 """
 
 from __future__ import annotations
@@ -33,8 +29,6 @@ __all__ = [
 
 @runtime_checkable
 class Registerable(Protocol):
-    """Any class that can appear in ``KNOWN_BACKENDS``."""
-
     name: str
     env_var: str
 
@@ -42,9 +36,6 @@ class Registerable(Protocol):
     def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Registerable: ...
 
 
-# Ordered list of all known backend classes.
-# The gateway iterates this list at startup and instantiates each backend
-# whose ``env_var`` is present in the environment.
 KNOWN_BACKENDS: list[type[Registerable]] = [
     LlamacppClient,
     ChatterboxClient,

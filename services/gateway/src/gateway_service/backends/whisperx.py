@@ -1,8 +1,4 @@
-"""WhisperX backend client — calls the whisperx STT /transcribe and /translate endpoints.
-
-Implements :class:`~gateway_service.protocols.AudioTranscriptions` and
-:class:`~gateway_service.protocols.AudioTranslations`.
-"""
+"""WhisperX backend client — STT via /transcribe and /translate endpoints."""
 
 from __future__ import annotations
 
@@ -19,13 +15,6 @@ logger = logging.getLogger(__name__)
 
 
 class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
-    """Typed HTTP client for the whisperx transcription (STT) backend.
-
-    Calls whisperx's RPC endpoints:
-    - POST /transcribe  (multipart form → JSON)
-    - POST /translate   (multipart form → JSON)
-    """
-
     name = "whisperx"
     env_var = "WHISPERX_URL"
     default_model_capabilities: ClassVar[list[str]] = ["transcription"]
@@ -42,7 +31,6 @@ class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
         word_timestamps: bool,
         diarize: bool = False,
     ) -> TranscriptionResult:
-        """Forward a transcription request as multipart form data."""
         return await self._stt_request(
             endpoint="/transcribe",
             file=file,
@@ -65,7 +53,6 @@ class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
         temperature: float,
         word_timestamps: bool,
     ) -> TranscriptionResult:
-        """Forward a translation request as multipart form data."""
         return await self._stt_request(
             endpoint="/translate",
             file=file,
@@ -75,8 +62,6 @@ class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
             temperature=temperature,
             word_timestamps=word_timestamps,
         )
-
-    # -- Shared helper ------------------------------------------------------
 
     async def _stt_request(
         self,
@@ -91,7 +76,6 @@ class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
         word_timestamps: bool = False,
         diarize: bool = False,
     ) -> TranscriptionResult:
-        """Send a multipart form request to the backend STT service."""
         url = f"{self._base_url}{endpoint}"
 
         data: dict[str, str] = {
@@ -113,12 +97,10 @@ class WhisperxClient(BaseBackend, AudioTranscriptions, AudioTranslations):
             detail = resp.text or f"Backend returned HTTP {resp.status_code}"
             raise HTTPException(status_code=resp.status_code, detail=detail)
 
-        raw = resp.json()
-        return self._parse_result(raw)
+        return self._parse_result(resp.json())
 
     @staticmethod
     def _parse_result(raw: dict) -> TranscriptionResult:
-        """Parse the backend's raw JSON into a TranscriptionResult."""
         segments = []
         for seg in raw.get("segments", []):
             words = []

@@ -1,5 +1,3 @@
-"""POST /v1/audio/speech — OpenAI-compatible TTS endpoint."""
-
 from __future__ import annotations
 
 import logging
@@ -19,14 +17,12 @@ router = APIRouter()
 
 
 def _get_speech_client(request: Request) -> AudioSpeech:
-    """Resolve the speech client from app state."""
     client = getattr(request.app.state, "audio_speech", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No speech backend configured.")
     return client
 
 
-# Map gateway SpeechResponseFormat enum to MIME content types.
 _FORMAT_CONTENT_TYPES: dict[SpeechResponseFormat, str] = {
     SpeechResponseFormat.mp3: "audio/mpeg",
     SpeechResponseFormat.wav: "audio/wav",
@@ -39,7 +35,6 @@ _FORMAT_CONTENT_TYPES: dict[SpeechResponseFormat, str] = {
 
 @router.post("/v1/audio/speech")
 async def create_speech(body: SpeechRequest, request: Request) -> Response:
-    """Generate speech audio from text input."""
     client = _get_speech_client(request)
 
     try:
@@ -50,7 +45,6 @@ async def create_speech(body: SpeechRequest, request: Request) -> Response:
         logger.exception("Speech synthesis failed")
         raise HTTPException(status_code=502, detail="Speech backend unavailable.") from exc
 
-    # Convert WAV to the requested output format
     audio_bytes, content_type = _convert_audio(wav_bytes, body.response_format)
 
     return Response(
@@ -64,11 +58,7 @@ async def create_speech(body: SpeechRequest, request: Request) -> Response:
 
 
 def _convert_audio(wav_bytes: bytes, fmt: SpeechResponseFormat) -> tuple[bytes, str]:
-    """Convert raw WAV bytes to the requested output format.
-
-    Currently supports WAV (passthrough) and MP3 (via pydub/ffmpeg).
-    Other formats raise 400.
-    """
+    """Convert WAV to the requested format. Supports WAV (passthrough) and MP3."""
     content_type = _FORMAT_CONTENT_TYPES.get(fmt, "application/octet-stream")
 
     if fmt == SpeechResponseFormat.wav:
@@ -76,10 +66,8 @@ def _convert_audio(wav_bytes: bytes, fmt: SpeechResponseFormat) -> tuple[bytes, 
 
     if fmt == SpeechResponseFormat.mp3:
         from gateway_service.formatting import wav_to_mp3
-
         return wav_to_mp3(wav_bytes), content_type
 
-    # Formats not yet supported by any backend
     raise HTTPException(
         status_code=400,
         detail=f"Audio format '{fmt.value}' is not currently supported. Use 'mp3' or 'wav'.",

@@ -1,8 +1,8 @@
 """POST /v1/chat/completions — proxied to llama.cpp server.
 
-When the request includes ``modalities: ["text", "audio"]``, the gateway
-streams text from the LLM and interleaves synthesised audio (PCM16) from
-the speech backend, matching the OpenAI streaming audio contract.
+When the request includes modalities: ["text", "audio"], the gateway streams
+text from the LLM and interleaves synthesised PCM16 audio from the speech
+backend, matching the OpenAI streaming audio contract.
 """
 
 from __future__ import annotations
@@ -29,34 +29,19 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-# ---------------------------------------------------------------------------
-# Sentence boundary detection
-# ---------------------------------------------------------------------------
-
-# Matches sentence-ending punctuation followed by whitespace, or a newline.
+# Sentence boundary: punctuation followed by whitespace, or newline.
 _BOUNDARY = re.compile(r"[.!?]\s|\n")
-
-# Force a TTS flush if the buffer exceeds this many characters.
 _MAX_SENTENCE_BUF = 500
-
-# Bytes of raw PCM16 per SSE audio-data event (~170 ms at 24 kHz mono).
-_AUDIO_CHUNK_BYTES = 8192
+_AUDIO_CHUNK_BYTES = 8192  # ~170 ms at 24 kHz mono PCM16
 
 
 def _extract_sentences(buf: str) -> tuple[str, str]:
-    """Split *buf* at the last sentence boundary.
-
-    Returns ``(complete, remainder)`` where *complete* contains all finished
-    sentences (stripped) and *remainder* is the leftover text.  If no boundary
-    is found and the buffer is shorter than ``_MAX_SENTENCE_BUF``, *complete*
-    is empty.
-    """
+    """Split buf at the last sentence boundary into (complete, remainder)."""
     matches = list(_BOUNDARY.finditer(buf))
     if matches:
         last = matches[-1]
         return buf[: last.end()].strip(), buf[last.end() :]
 
-    # Force-split overly long buffers at the last space.
     if len(buf) > _MAX_SENTENCE_BUF:
         space = buf.rfind(" ", 0, _MAX_SENTENCE_BUF)
         if space > 0:
@@ -66,13 +51,7 @@ def _extract_sentences(buf: str) -> tuple[str, str]:
     return "", buf
 
 
-# ---------------------------------------------------------------------------
-# Client helpers
-# ---------------------------------------------------------------------------
-
-
 def _get_chat_client(request: Request) -> ChatCompletions:
-    """Resolve the chat completions client from app state."""
     client = getattr(request.app.state, "chat_completions", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No chat backend configured.")
@@ -80,7 +59,6 @@ def _get_chat_client(request: Request) -> ChatCompletions:
 
 
 def _get_speech_client(request: Request) -> AudioSpeech:
-    """Resolve the speech client from app state."""
     client = getattr(request.app.state, "audio_speech", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No speech backend configured.")
@@ -96,28 +74,15 @@ def _find_tts_model(request: Request) -> str:
             return model.id
     raise HTTPException(
         status_code=400,
-        detail=(
-            "No TTS model available for audio output. "
-            "Specify 'audio.model' in the request or ensure a TTS backend is running."
-        ),
+        detail="No TTS model available for audio output. Specify 'audio.model' in the request.",
     )
 
 
-# ---------------------------------------------------------------------------
-# Audio SSE helpers
-# ---------------------------------------------------------------------------
-
-
 def _audio_sse(template: dict, **audio_fields: object) -> str:
-    """Format an SSE event carrying an ``audio`` delta."""
     event = {
         **template,
         "choices": [
-            {
-                "index": 0,
-                "delta": {"audio": audio_fields},
-                "finish_reason": None,
-            }
+            {"index": 0, "delta": {"audio": audio_fields}, "finish_reason": None}
         ],
     }
     return f"data: {json.dumps(event)}\n\n"
@@ -131,16 +96,13 @@ async def _synth_and_emit(
     template: dict,
     audio_id: str,
 ):
-    """Synthesise *text*, then yield audio-data and transcript SSE events.
+    """Synthesise text, yield audio-data and transcript SSE events.
 
-    Errors during synthesis are logged but swallowed so that text streaming
-    continues uninterrupted.
+    Errors are logged but swallowed so text streaming continues.
     """
     try:
         req = SpeechRequest(
-            model=tts_model,
-            input=text,
-            voice=voice,
+            model=tts_model, input=text, voice=voice,
             response_format=SpeechResponseFormat.wav,
         )
         wav_bytes, _ = await speech_client.synthesize(req)
@@ -148,32 +110,15 @@ async def _synth_and_emit(
 
         for i in range(0, len(pcm_data), _AUDIO_CHUNK_BYTES):
             chunk = pcm_data[i : i + _AUDIO_CHUNK_BYTES]
-            yield _audio_sse(
-                template, data=base64.b64encode(chunk).decode()
-            )
+            yield _audio_sse(template, data=base64.b64encode(chunk).decode())
 
         yield _audio_sse(template, transcript=text)
     except Exception:
         logger.exception("Audio synthesis failed for chunk: %s", text[:80])
 
 
-# ---------------------------------------------------------------------------
-# Route
-# ---------------------------------------------------------------------------
-
-
 @router.post("/v1/chat/completions", response_model=None)
 async def chat_completions(request: Request) -> JSONResponse | StreamingResponse:
-    """Create a chat completion.
-
-    Transparently proxies the request to the llama.cpp server backend.
-    Supports both streaming (``"stream": true``) and non-streaming responses.
-
-    When ``modalities`` includes ``"audio"`` and streaming is enabled, the
-    response interleaves text deltas with base64-encoded PCM16 audio chunks
-    synthesised by the speech backend — matching the OpenAI audio-in-chat
-    contract.
-    """
     client = _get_chat_client(request)
     body = await request.json()
 
@@ -200,9 +145,7 @@ async def chat_completions(request: Request) -> JSONResponse | StreamingResponse
 
 
 async def _chat_with_audio(
-    request: Request,
-    chat_client: ChatCompletions,
-    body: dict,
+    request: Request, chat_client: ChatCompletions, body: dict,
 ) -> StreamingResponse:
     """Stream text from the LLM and interleave TTS audio."""
     speech_client = _get_speech_client(request)
@@ -211,7 +154,7 @@ async def _chat_with_audio(
     voice = audio_cfg.get("voice", "default")
     tts_model = audio_cfg.get("model") or _find_tts_model(request)
 
-    # Strip audio-specific fields before forwarding to the LLM.
+    # Strip audio-specific fields before forwarding to the LLM
     llm_body = {k: v for k, v in body.items() if k not in ("modalities", "audio")}
 
     try:
@@ -242,7 +185,6 @@ async def _chat_with_audio(
                 except json.JSONDecodeError:
                     continue
 
-                # Capture metadata from the first chunk for audio events.
                 if template is None:
                     template = {
                         "id": chunk.get("id", ""),
@@ -252,35 +194,22 @@ async def _chat_with_audio(
                     }
                     yield _audio_sse(template, id=audio_id)
 
-                # Always forward the text delta immediately.
                 yield f"data: {json.dumps(chunk)}\n\n"
 
-                content = (chunk.get("choices") or [{}])[0].get("delta", {}).get(
-                    "content"
-                )
+                content = (chunk.get("choices") or [{}])[0].get("delta", {}).get("content")
                 if content:
                     sentence_buf += content
                     complete, sentence_buf = _extract_sentences(sentence_buf)
                     if complete:
                         async for evt in _synth_and_emit(
-                            speech_client,
-                            complete,
-                            tts_model,
-                            voice,
-                            template,
-                            audio_id,
+                            speech_client, complete, tts_model, voice, template, audio_id,
                         ):
                             yield evt
 
-            # Flush any remaining text after the LLM stream ends.
+            # Flush remaining text
             if sentence_buf.strip() and template:
                 async for evt in _synth_and_emit(
-                    speech_client,
-                    sentence_buf.strip(),
-                    tts_model,
-                    voice,
-                    template,
-                    audio_id,
+                    speech_client, sentence_buf.strip(), tts_model, voice, template, audio_id,
                 ):
                     yield evt
 

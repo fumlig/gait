@@ -1,8 +1,3 @@
-"""Tests for the WhisperX STT backend (Starlette).
-
-These tests mock the engine so they can run without a GPU or model weights.
-"""
-
 from __future__ import annotations
 
 import io
@@ -13,9 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 MOCK_SEGMENTS = [
     {
@@ -70,11 +62,6 @@ def _make_wav_bytes(duration_s: float = 1.0, sample_rate: int = 16000) -> bytes:
     return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def mock_engine():
     """Patch the engine singleton so no real model is loaded."""
@@ -124,11 +111,6 @@ async def client(app):
         yield c
 
 
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
-
 async def test_health(client: AsyncClient):
     resp = await client.get("/health")
     assert resp.status_code == 200
@@ -136,11 +118,6 @@ async def test_health(client: AsyncClient):
     assert data["status"] == "ok"
     assert data["model_loaded"] is True
     assert data["loaded_model"] == "large-v3"
-
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
 
 
 async def test_list_models(client: AsyncClient):
@@ -185,11 +162,6 @@ async def test_list_models_all_known_sizes(client: AsyncClient):
     assert "tiny" in model_ids
     assert "large-v3" in model_ids
     assert "turbo" in model_ids
-
-
-# ---------------------------------------------------------------------------
-# Transcription
-# ---------------------------------------------------------------------------
 
 
 async def test_transcribe_returns_json(client: AsyncClient, mock_engine: MagicMock):
@@ -306,11 +278,6 @@ async def test_transcribe_failure(client: AsyncClient, mock_engine: MagicMock):
     )
     assert resp.status_code == 500
     assert "failed" in resp.json()["detail"].lower()
-
-
-# ---------------------------------------------------------------------------
-# Translation
-# ---------------------------------------------------------------------------
 
 
 async def test_translate_returns_json(client: AsyncClient, mock_engine: MagicMock):

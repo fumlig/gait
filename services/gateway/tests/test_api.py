@@ -1,10 +1,3 @@
-"""Tests for the API gateway.
-
-These tests mock the backend client instances to avoid needing real backend
-services.  The voice client is tested with real filesystem operations
-(tmp_path).  Clients are attached directly to ``app.state`` protocol slots.
-"""
-
 from __future__ import annotations
 
 import json
@@ -28,10 +21,6 @@ if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
     from gateway_service.models import SpeechRequest
-
-# ---------------------------------------------------------------------------
-# Test data
-# ---------------------------------------------------------------------------
 
 CHATTERBOX_MODELS = [
     ModelObject(
@@ -68,7 +57,6 @@ LLAMACPP_MODELS = [
 
 ALL_MODELS = CHATTERBOX_MODELS + WHISPERX_MODELS + LLAMACPP_MODELS
 
-# Minimal valid WAV (44-byte header + 2 bytes of silence)
 _WAV_HEADER = (
     b"RIFF"
     b"\x2e\x00\x00\x00"  # file size - 8
@@ -115,13 +103,7 @@ MOCK_TRANSCRIPTION_RESULT = TranscriptionResult(
 )
 
 
-# ---------------------------------------------------------------------------
-# Mock client factories
-# ---------------------------------------------------------------------------
-
-
 def _make_mock_stream():
-    """Create a fresh mock StreamingResponse for streaming tests."""
     from starlette.responses import StreamingResponse
 
     async def _gen():
@@ -136,7 +118,6 @@ def _make_speech_client(
     synthesize_result: tuple[bytes, str] = (_WAV_HEADER, "audio/wav"),
     synthesize_error: Exception | None = None,
 ) -> AsyncMock:
-    """Create a mock ChatterboxClient (AudioSpeech)."""
     client = AsyncMock()
     client.name = "chatterbox"
     client.base_url = "http://chatterbox:8000"
@@ -155,7 +136,6 @@ def _make_transcription_client(
     translate_result: TranscriptionResult | None = None,
     transcribe_error: Exception | None = None,
 ) -> AsyncMock:
-    """Create a mock WhisperxClient (AudioTranscriptions + AudioTranslations)."""
     client = AsyncMock()
     client.name = "whisperx"
     client.base_url = "http://whisperx:8000"
@@ -240,7 +220,6 @@ MOCK_EMBEDDINGS = {
 
 
 def _make_chat_client() -> AsyncMock:
-    """Create a mock LlamacppClient (ChatCompletions + Completions + Responses + Embeddings)."""
     client = AsyncMock()
     client.name = "llamacpp"
     client.base_url = "http://llamacpp:8000"
@@ -263,11 +242,6 @@ def _make_chat_client() -> AsyncMock:
     client.embeddings.return_value = MOCK_EMBEDDINGS
 
     return client
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
@@ -338,11 +312,6 @@ async def client(app):
         yield c
 
 
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
-
 async def test_health_all_healthy(client: AsyncClient):
     """Gateway reports 'ok' when all backends are healthy."""
     resp = await client.get("/health")
@@ -364,11 +333,6 @@ async def test_health_backend_down(client: AsyncClient, speech_client: AsyncMock
     data = resp.json()
     assert data["status"] == "degraded"
     assert data["backends"]["chatterbox"] == "unreachable"
-
-
-# ---------------------------------------------------------------------------
-# Models (cached)
-# ---------------------------------------------------------------------------
 
 
 async def test_list_models_merged(client: AsyncClient):
@@ -425,11 +389,6 @@ async def test_list_models_empty_when_no_models():
     assert resp.status_code == 200
     data = resp.json()
     assert data["data"] == []
-
-
-# ---------------------------------------------------------------------------
-# Audio: Speech
-# ---------------------------------------------------------------------------
 
 
 async def test_speech_wav(client: AsyncClient, speech_client: AsyncMock):
@@ -498,11 +457,6 @@ async def test_speech_unsupported_format(client: AsyncClient, speech_client: Asy
     )
     assert resp.status_code == 400
     assert "not currently supported" in resp.json()["detail"]
-
-
-# ---------------------------------------------------------------------------
-# Audio: Transcriptions
-# ---------------------------------------------------------------------------
 
 
 async def test_transcription_json(client: AsyncClient, transcription_client: AsyncMock):
@@ -631,11 +585,6 @@ async def test_transcription_backend_unavailable(
     assert resp.status_code == 502
 
 
-# ---------------------------------------------------------------------------
-# Audio: Translations
-# ---------------------------------------------------------------------------
-
-
 async def test_translation_json(client: AsyncClient, transcription_client: AsyncMock):
     """Translation requests call the transcription client's translate method."""
     resp = await client.post(
@@ -667,11 +616,6 @@ async def test_translation_invalid_format(client: AsyncClient):
         data={"model": "whisper-1", "response_format": "invalid"},
     )
     assert resp.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# Audio: Voices (local filesystem via VoiceClient)
-# ---------------------------------------------------------------------------
 
 
 async def test_list_voices_empty(client: AsyncClient):
@@ -833,11 +777,6 @@ async def test_voice_client_unavailable():
     assert resp.status_code == 503
 
 
-# ---------------------------------------------------------------------------
-# Chat
-# ---------------------------------------------------------------------------
-
-
 async def test_chat_completions(client: AsyncClient, chat_client: AsyncMock):
     """POST /v1/chat/completions returns a chat completion response."""
     resp = await client.post(
@@ -887,11 +826,6 @@ async def test_chat_completions_backend_unavailable(
         },
     )
     assert resp.status_code == 502
-
-
-# ---------------------------------------------------------------------------
-# Chat with audio modality
-# ---------------------------------------------------------------------------
 
 
 def _make_wav_24k(num_samples: int = 100) -> bytes:
@@ -946,7 +880,6 @@ def _sse_chunk(content: str, *, role: bool = False) -> str:
     return f"data: {json.dumps(obj)}"
 
 
-# Tokens chosen so that "!" + " How" triggers a sentence boundary.
 _AUDIO_SSE_LINES: list[str] = [
     _sse_chunk("", role=True),
     "",
@@ -1107,11 +1040,6 @@ async def test_chat_audio_synthesis_failure_continues(
     assert audio_data_chunks == []
 
 
-# ---------------------------------------------------------------------------
-# Completions (legacy)
-# ---------------------------------------------------------------------------
-
-
 async def test_text_completions(client: AsyncClient, chat_client: AsyncMock):
     """POST /v1/completions returns a text completion response."""
     resp = await client.post(
@@ -1148,11 +1076,6 @@ async def test_text_completions_backend_unavailable(
         json={"model": "my-model", "prompt": "Hello"},
     )
     assert resp.status_code == 502
-
-
-# ---------------------------------------------------------------------------
-# Responses
-# ---------------------------------------------------------------------------
 
 
 async def test_responses(client: AsyncClient, chat_client: AsyncMock):
@@ -1201,11 +1124,6 @@ async def test_responses_backend_unavailable(client: AsyncClient, chat_client: A
     assert resp.status_code == 502
 
 
-# ---------------------------------------------------------------------------
-# Embeddings
-# ---------------------------------------------------------------------------
-
-
 async def test_embeddings(client: AsyncClient, chat_client: AsyncMock):
     """POST /v1/embeddings returns an embeddings response."""
     resp = await client.post(
@@ -1230,11 +1148,6 @@ async def test_embeddings_backend_unavailable(client: AsyncClient, chat_client: 
         json={"model": "my-model", "input": "Hello world"},
     )
     assert resp.status_code == 502
-
-
-# ---------------------------------------------------------------------------
-# No backend configured → 503
-# ---------------------------------------------------------------------------
 
 
 async def test_no_backend_configured():

@@ -1,5 +1,3 @@
-"""POST /v1/responses — OpenAI Responses API, proxied to llama.cpp server."""
-
 from __future__ import annotations
 
 import logging
@@ -19,7 +17,6 @@ router = APIRouter()
 
 
 def _get_responses_client(request: Request) -> Responses:
-    """Resolve the responses client from app state."""
     client = getattr(request.app.state, "responses", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No responses backend configured.")
@@ -28,13 +25,6 @@ def _get_responses_client(request: Request) -> Responses:
 
 @router.post("/v1/responses", response_model=None)
 async def create_response(request: Request) -> JSONResponse | StreamingResponse:
-    """Create a model response.
-
-    Transparently proxies the request to the llama.cpp server backend.
-    Supports both streaming (``"stream": true``) and non-streaming responses.
-
-    See https://platform.openai.com/docs/api-reference/responses
-    """
     client = _get_responses_client(request)
     body = await request.json()
 

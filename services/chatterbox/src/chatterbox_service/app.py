@@ -1,15 +1,9 @@
-"""Minimal Chatterbox TTS service (Starlette).
-
-RPC-style backend for the gateway.  No OpenAI-compatible routing —
-just raw synthesize / models / health endpoints.
-
-Models are loaded lazily on first request via ``engine.ensure_model``
-and unloaded automatically after a configurable idle timeout.
+"""Chatterbox TTS service (Starlette).
 
 Endpoints:
-    POST /synthesize  - JSON body -> audio/wav binary
-    GET  /models      - list available models with loaded status
-    GET  /health      - liveness / readiness check
+    POST /synthesize  - JSON body -> audio/wav
+    GET  /models      - available models with loaded status
+    GET  /health      - liveness / readiness
 """
 
 from __future__ import annotations
@@ -46,13 +40,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _build_model_list() -> list[dict[str, object]]:
-    """Build the model list with capabilities and loaded status."""
     loaded = engine.loaded_models
     return [
         {
@@ -67,25 +55,17 @@ def _build_model_list() -> list[dict[str, object]]:
 
 
 def _wav_to_bytes(wav: torch.Tensor, sample_rate: int) -> bytes:
-    """Encode a waveform tensor to WAV bytes."""
     buf = io.BytesIO()
     torchaudio.save(buf, wav, sample_rate, format="wav")
     return buf.getvalue()
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
 async def synthesize(request: Request) -> Response:
-    """Generate speech from text.  Returns raw WAV bytes."""
     try:
         body = await request.json()
     except json.JSONDecodeError:
         return JSONResponse({"detail": "Invalid JSON body."}, status_code=400)
 
-    # Required fields
     text = body.get("text")
     voice = body.get("voice")
     model = body.get("model")
@@ -95,13 +75,11 @@ async def synthesize(request: Request) -> Response:
             status_code=400,
         )
 
-    # Validate and ensure model is loaded (lazy loading)
     try:
         model_name = engine.ensure_model(model)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    # Validate language for multilingual models
     language = body.get("language")
     try:
         validate_language(model_name, language)
@@ -111,7 +89,6 @@ async def synthesize(request: Request) -> Response:
     if not engine.is_loaded:
         return JSONResponse({"detail": "No model is loaded yet."}, status_code=503)
 
-    # Optional params with defaults matching SpeechRequest schema
     speed = float(body.get("speed", 1.0))
     exaggeration = float(body.get("exaggeration", 0.5))
     cfg_weight = float(body.get("cfg_weight", 0.5))
@@ -124,7 +101,6 @@ async def synthesize(request: Request) -> Response:
     if seed is not None:
         seed = int(seed)
 
-    # Generate
     try:
         wav, sr = engine.generate(
             text=text,
@@ -157,12 +133,10 @@ async def synthesize(request: Request) -> Response:
 
 
 async def list_models(request: Request) -> JSONResponse:
-    """Return available model list with capabilities and loaded status."""
     return JSONResponse({"object": "list", "data": _build_model_list()})
 
 
 async def health(request: Request) -> JSONResponse:
-    """Liveness / readiness check."""
     return JSONResponse(
         {
             "status": "ok",
@@ -172,17 +146,10 @@ async def health(request: Request) -> JSONResponse:
     )
 
 
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
-
-
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    """Optionally preload the default model, start idle checker."""
     idle_task = None
 
-    # Start idle timeout background task if configured
     if settings.model_idle_timeout > 0:
 
         async def _idle_checker() -> None:
@@ -196,14 +163,11 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
 
         idle_task = asyncio.create_task(_idle_checker())
 
-    # Optionally preload default model
     if settings.default_model:
         logger.info("Preloading default model: %s", settings.default_model)
         engine.load(settings.default_model)
     else:
-        logger.info(
-            "No default model configured — models will be loaded lazily on first request."
-        )
+        logger.info("No default model — models will load lazily on first request.")
 
     yield
 

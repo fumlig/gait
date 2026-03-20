@@ -1,10 +1,4 @@
-"""Llama.cpp backend client — transparent proxy to the llama.cpp server.
-
-Implements :class:`~gateway_service.protocols.ChatCompletions`,
-:class:`~gateway_service.protocols.Completions`,
-:class:`~gateway_service.protocols.Responses`, and
-:class:`~gateway_service.protocols.Embeddings`.
-"""
+"""Llama.cpp backend client — transparent proxy to the llama.cpp server."""
 
 from __future__ import annotations
 
@@ -24,75 +18,46 @@ logger = logging.getLogger(__name__)
 
 
 class LlamacppClient(BaseBackend, ChatCompletions, Completions, Responses, Embeddings):
-    """Typed HTTP client for the llama.cpp server backend.
-
-    Since llama-server is already OpenAI-compatible, this client acts as a
-    transparent proxy — forwarding requests and streaming responses without
-    any schema transformation.
-    """
-
     name = "llamacpp"
     env_var = "LLAMACPP_URL"
     default_model_capabilities: ClassVar[list[str]] = ["chat", "completions", "embeddings"]
     models_path = "/v1/models"
 
-    # -- ChatCompletions protocol -------------------------------------------
-
     async def chat_completions(self, body: dict) -> dict:
-        """POST /v1/chat/completions (non-streaming)."""
         return await self._forward("/v1/chat/completions", body)
 
     async def chat_completions_stream(self, body: dict) -> StreamingResponse:
-        """POST /v1/chat/completions (streaming)."""
         return await self._forward_stream("/v1/chat/completions", body)
 
     async def chat_completions_stream_raw(self, body: dict) -> httpx.Response:
-        """POST /v1/chat/completions (raw streaming for audio interleaving)."""
+        """Return the raw streaming httpx response. Caller must close it."""
         return await self._stream_raw("/v1/chat/completions", body)
 
-    # -- Completions protocol -----------------------------------------------
-
     async def completions(self, body: dict) -> dict:
-        """POST /v1/completions (non-streaming)."""
         return await self._forward("/v1/completions", body)
 
     async def completions_stream(self, body: dict) -> StreamingResponse:
-        """POST /v1/completions (streaming)."""
         return await self._forward_stream("/v1/completions", body)
 
-    # -- Responses protocol -------------------------------------------------
-
     async def create_response(self, body: dict) -> dict:
-        """POST /v1/responses (non-streaming)."""
         return await self._forward("/v1/responses", body)
 
     async def create_response_stream(self, body: dict) -> StreamingResponse:
-        """POST /v1/responses (streaming)."""
         return await self._forward_stream("/v1/responses", body)
 
-    # -- Embeddings protocol ------------------------------------------------
-
     async def embeddings(self, body: dict) -> dict:
-        """POST /v1/embeddings."""
         return await self._forward("/v1/embeddings", body)
 
-    # -- Private helpers ----------------------------------------------------
-
     async def _forward(self, path: str, body: dict) -> dict:
-        """Forward a JSON request and return the parsed JSON response."""
         url = f"{self._base_url}{path}"
         resp = await self._http_client.post(url, json=body)
-
         if resp.status_code != 200:
             detail = resp.text or f"Backend returned HTTP {resp.status_code}"
             raise HTTPException(status_code=resp.status_code, detail=detail)
-
         return resp.json()
 
     async def _forward_stream(self, path: str, body: dict) -> StreamingResponse:
-        """Forward a JSON request and return a streaming response."""
         url = f"{self._base_url}{path}"
-
         req = self._http_client.build_request("POST", url, json=body)
         resp = await self._http_client.send(req, stream=True)
 
@@ -113,10 +78,6 @@ class LlamacppClient(BaseBackend, ChatCompletions, Completions, Responses, Embed
         return StreamingResponse(_generate(), media_type=content_type)
 
     async def _stream_raw(self, path: str, body: dict) -> httpx.Response:
-        """Forward a JSON request and return the raw streaming httpx response.
-
-        The caller **must** close the response when done.
-        """
         url = f"{self._base_url}{path}"
         req = self._http_client.build_request("POST", url, json=body)
         resp = await self._http_client.send(req, stream=True)

@@ -1,7 +1,5 @@
-"""Response formatting utilities for gateway routes.
-
-Contains STT response formatting (json, text, srt, vtt, verbose_json) and
-TTS audio format conversion (WAV to MP3).
+"""STT response formatting (json, text, srt, vtt, verbose_json) and
+TTS audio conversion (WAV → MP3).
 """
 
 from __future__ import annotations
@@ -26,26 +24,12 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# STT response formatting
-# ---------------------------------------------------------------------------
-
-
 def format_transcription(
     result: TranscriptionResult,
     fmt: TranscriptionResponseFormat,
     task: str = "transcribe",
 ) -> Response:
-    """Format a ``TranscriptionResult`` into the OpenAI-compatible response shape.
-
-    The *fmt* parameter determines the output format:
-    - json: ``{"text": "..."}``
-    - text: plain text
-    - verbose_json: full segments, words, language, duration
-    - srt: SRT subtitles
-    - vtt: WebVTT subtitles
-    """
-    # Convert RawSegments to OpenAI-compatible Segments
+    """Format a TranscriptionResult into the requested response shape."""
     segments = [
         Segment(
             id=i,
@@ -53,12 +37,7 @@ def format_transcription(
             end=seg.end,
             text=seg.text,
             words=[
-                WordTimestamp(
-                    word=w.word,
-                    start=w.start,
-                    end=w.end,
-                    score=w.score,
-                )
+                WordTimestamp(word=w.word, start=w.start, end=w.end, score=w.score)
                 for w in seg.words
             ],
             speaker=seg.speaker,
@@ -104,7 +83,6 @@ def format_transcription(
             media_type="text/plain",
         )
 
-    # Fallback (should not happen due to enum validation)
     return Response(
         content=TranscriptionResponse(text=result.text).model_dump_json(),
         media_type="application/json",
@@ -112,7 +90,6 @@ def format_transcription(
 
 
 def _segments_to_srt(segments: list[Segment]) -> str:
-    """Format segments as SRT subtitles."""
     lines = []
     for i, seg in enumerate(segments, 1):
         start = _format_timestamp_srt(seg.start)
@@ -125,7 +102,6 @@ def _segments_to_srt(segments: list[Segment]) -> str:
 
 
 def _segments_to_vtt(segments: list[Segment]) -> str:
-    """Format segments as WebVTT subtitles."""
     lines = ["WEBVTT", ""]
     for seg in segments:
         start = _format_timestamp_vtt(seg.start)
@@ -137,7 +113,6 @@ def _segments_to_vtt(segments: list[Segment]) -> str:
 
 
 def _format_timestamp_srt(seconds: float) -> str:
-    """Format seconds as HH:MM:SS,mmm for SRT."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -146,7 +121,6 @@ def _format_timestamp_srt(seconds: float) -> str:
 
 
 def _format_timestamp_vtt(seconds: float) -> str:
-    """Format seconds as HH:MM:SS.mmm for VTT."""
     h = int(seconds // 3600)
     m = int((seconds % 3600) // 60)
     s = int(seconds % 60)
@@ -154,18 +128,11 @@ def _format_timestamp_vtt(seconds: float) -> str:
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
 
 
-# ---------------------------------------------------------------------------
-# TTS audio format conversion
-# ---------------------------------------------------------------------------
-
-
 def wav_to_pcm16(wav_bytes: bytes, target_sr: int = 24000) -> tuple[bytes, int]:
     """Convert WAV bytes to raw PCM16 mono at a target sample rate.
 
-    Returns ``(pcm_bytes, sample_rate)``.  If the source WAV is already 16-bit
-    mono at the target rate, the raw frames are returned directly.  Otherwise
-    pydub (via ffmpeg) handles resampling, channel conversion, and format
-    conversion (e.g. 32-bit float WAV → 16-bit PCM).
+    Returns (pcm_bytes, sample_rate). Falls back to pydub for non-standard
+    WAV formats (e.g. 32-bit float).
     """
     import wave
 
@@ -180,8 +147,6 @@ def wav_to_pcm16(wav_bytes: bytes, target_sr: int = 24000) -> tuple[bytes, int]:
         if sample_width == 2 and channels == 1 and sr == target_sr:
             return frames, sr
     except wave.Error:
-        # Python's wave module only supports PCM (format tag 1).
-        # Float WAV (format tag 3) and other variants fall through to pydub.
         pass
 
     from pydub import AudioSegment
@@ -192,7 +157,7 @@ def wav_to_pcm16(wav_bytes: bytes, target_sr: int = 24000) -> tuple[bytes, int]:
 
 
 def wav_to_mp3(wav_bytes: bytes) -> bytes:
-    """Convert WAV bytes to MP3 bytes using pydub (requires ffmpeg)."""
+    """Convert WAV bytes to MP3 via pydub (requires ffmpeg)."""
     from pydub import AudioSegment
 
     wav_buf = io.BytesIO(wav_bytes)

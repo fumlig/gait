@@ -1,8 +1,3 @@
-"""Tests for the Chatterbox TTS backend (Starlette).
-
-These tests mock the engine so they can run without a GPU or model weights.
-"""
-
 from __future__ import annotations
 
 from unittest.mock import MagicMock, patch
@@ -11,9 +6,6 @@ import pytest
 import torch
 from httpx import ASGITransport, AsyncClient
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 SAMPLE_RATE = 24000
 DUMMY_WAV = torch.randn(1, SAMPLE_RATE)  # 1 second of noise
@@ -69,11 +61,6 @@ async def client(app):
         yield c
 
 
-# ---------------------------------------------------------------------------
-# Health
-# ---------------------------------------------------------------------------
-
-
 async def test_health(client: AsyncClient):
     resp = await client.get("/health")
     assert resp.status_code == 200
@@ -90,11 +77,6 @@ async def test_health_shows_per_model_status(client: AsyncClient):
     assert data["models"]["chatterbox-turbo"] is True
     assert data["models"]["chatterbox"] is False
     assert data["models"]["chatterbox-multilingual"] is False
-
-
-# ---------------------------------------------------------------------------
-# Models
-# ---------------------------------------------------------------------------
 
 
 async def test_list_models(client: AsyncClient):
@@ -133,11 +115,6 @@ async def test_list_models_loaded_status(client: AsyncClient):
     assert by_id["chatterbox-multilingual"]["loaded"] is False
 
 
-# ---------------------------------------------------------------------------
-# Synthesize — basic generation
-# ---------------------------------------------------------------------------
-
-
 async def test_synthesize_returns_wav(client: AsyncClient, mock_engine: MagicMock):
     resp = await client.post(
         "/synthesize",
@@ -151,11 +128,6 @@ async def test_synthesize_returns_wav(client: AsyncClient, mock_engine: MagicMoc
     assert resp.headers["content-type"] == "audio/wav"
     assert resp.content[:4] == b"RIFF"
     mock_engine.generate.assert_called_once()
-
-
-# ---------------------------------------------------------------------------
-# Synthesize — model aliases
-# ---------------------------------------------------------------------------
 
 
 async def test_synthesize_alias_tts1(client: AsyncClient, mock_engine: MagicMock):
@@ -188,11 +160,6 @@ async def test_synthesize_alias_tts1hd(client: AsyncClient, mock_engine: MagicMo
     mock_engine.ensure_model.assert_called_with("tts-1-hd")
 
 
-# ---------------------------------------------------------------------------
-# Synthesize — original model parameters
-# ---------------------------------------------------------------------------
-
-
 async def test_synthesize_original_model(client: AsyncClient, mock_engine: MagicMock):
     """The original chatterbox model should accept exaggeration and cfg_weight."""
     mock_engine.ensure_model.return_value = "chatterbox"
@@ -211,11 +178,6 @@ async def test_synthesize_original_model(client: AsyncClient, mock_engine: Magic
     assert call_kwargs.kwargs["model_name"] == "chatterbox"
     assert call_kwargs.kwargs["exaggeration"] == 0.8
     assert call_kwargs.kwargs["cfg_weight"] == 0.7
-
-
-# ---------------------------------------------------------------------------
-# Synthesize — multilingual model
-# ---------------------------------------------------------------------------
 
 
 async def test_synthesize_multilingual(client: AsyncClient, mock_engine: MagicMock):
@@ -279,11 +241,6 @@ async def test_synthesize_multilingual_invalid_language(
     assert "xx" in resp.json()["detail"]
 
 
-# ---------------------------------------------------------------------------
-# Synthesize — extended parameters
-# ---------------------------------------------------------------------------
-
-
 async def test_synthesize_with_seed(client: AsyncClient, mock_engine: MagicMock):
     """Seed parameter should be passed through to engine."""
     resp = await client.post(
@@ -320,11 +277,6 @@ async def test_synthesize_with_sampling_params(client: AsyncClient, mock_engine:
     assert call_kwargs.kwargs["repetition_penalty"] == 1.5
     assert call_kwargs.kwargs["top_p"] == 0.9
     assert call_kwargs.kwargs["top_k"] == 500
-
-
-# ---------------------------------------------------------------------------
-# Synthesize — error cases
-# ---------------------------------------------------------------------------
 
 
 async def test_synthesize_unknown_model(client: AsyncClient, mock_engine: MagicMock):
@@ -368,11 +320,6 @@ async def test_synthesize_generation_failure(client: AsyncClient, mock_engine: M
     )
     assert resp.status_code == 500
     assert "failed" in resp.json()["detail"].lower()
-
-
-# ---------------------------------------------------------------------------
-# Synthesize — default parameter values
-# ---------------------------------------------------------------------------
 
 
 async def test_synthesize_default_params(client: AsyncClient, mock_engine: MagicMock):

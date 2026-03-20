@@ -1,4 +1,4 @@
-"""WhisperX model loading, inference, alignment, and diarization."""
+"""WhisperX engine: transcription, alignment, and diarization."""
 
 from __future__ import annotations
 
@@ -14,42 +14,24 @@ from whisperx_service.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Valid whisper model sizes that WhisperX supports.
 WHISPER_MODEL_SIZES = frozenset(
     {
-        "tiny",
-        "tiny.en",
-        "base",
-        "base.en",
-        "small",
-        "small.en",
-        "medium",
-        "medium.en",
-        "large",
-        "large-v1",
-        "large-v2",
-        "large-v3",
+        "tiny", "tiny.en", "base", "base.en", "small", "small.en",
+        "medium", "medium.en", "large", "large-v1", "large-v2", "large-v3",
         "turbo",
     }
 )
 
 
 class WhisperXEngine:
-    """Manages the WhisperX pipeline: transcription, alignment, diarization."""
-
     def __init__(self) -> None:
         self._model: Any = None
         self._model_name: str | None = None
-        self._align_models: dict[str, tuple[Any, Any]] = {}  # lang -> (model, metadata)
+        self._align_models: dict[str, tuple[Any, Any]] = {}
         self._diarize_pipeline: Any = None
         self._last_used: float = 0.0
 
-    # ------------------------------------------------------------------
-    # Lifecycle
-    # ------------------------------------------------------------------
-
     def load(self, model_name: str | None = None) -> None:
-        """Load a whisper model onto the configured device."""
         import whisperx
 
         name = model_name or settings.default_model
@@ -59,21 +41,16 @@ class WhisperXEngine:
 
         logger.info(
             "Loading WhisperX model=%s device=%s compute_type=%s ...",
-            name,
-            settings.device,
-            settings.compute_type,
+            name, settings.device, settings.compute_type,
         )
         self._model = whisperx.load_model(
-            name,
-            device=settings.device,
-            compute_type=settings.compute_type,
+            name, device=settings.device, compute_type=settings.compute_type,
         )
         self._model_name = name
         self.touch()
         logger.info("WhisperX model loaded: %s", name)
 
     def unload(self) -> None:
-        """Release all model resources."""
         self._model = None
         self._model_name = None
         self._align_models.clear()
@@ -88,7 +65,6 @@ class WhisperXEngine:
         if self._model_name == resolved and self._model is not None:
             return
         logger.info("Swapping model: %s -> %s", self._model_name, resolved)
-        # Only unload the whisper model, keep alignment/diarization cached
         self._model = None
         self._model_name = None
         if torch.cuda.is_available():
@@ -103,67 +79,41 @@ class WhisperXEngine:
     def loaded_model_name(self) -> str | None:
         return self._model_name
 
-    # ------------------------------------------------------------------
-    # Idle tracking
-    # ------------------------------------------------------------------
-
     def touch(self) -> None:
-        """Record that the engine was just used (reset idle timer)."""
         self._last_used = time.monotonic()
 
     def idle_seconds(self) -> float:
-        """Return the number of seconds since last use, or 0 if never used."""
         if not self.is_loaded or self._last_used == 0.0:
             return 0.0
         return time.monotonic() - self._last_used
 
     def unload_if_idle(self, timeout: float) -> bool:
-        """Unload all models if idle longer than *timeout* seconds.
-
-        Returns True if models were unloaded.
-        """
         if timeout <= 0 or not self.is_loaded:
             return False
         if self.idle_seconds() >= timeout:
             logger.info(
                 "Idle for %.0fs (timeout=%ds), unloading models.",
-                self.idle_seconds(),
-                timeout,
+                self.idle_seconds(), timeout,
             )
             self.unload()
             return True
         return False
 
-    # ------------------------------------------------------------------
-    # Model name resolution
-    # ------------------------------------------------------------------
-
     def _resolve_model_name(self, name: str) -> str:
-        """Map OpenAI-compatible aliases to actual whisper model names."""
         if name == "whisper-1":
             return settings.default_model or "large-v3"
         if name in WHISPER_MODEL_SIZES:
             return name
-        # Allow pass-through for custom model paths/names
         return name
 
     def list_available_models(self) -> list[str]:
-        """Return model IDs that this service reports as available.
-
-        Returns all known model sizes plus the OpenAI alias.
-        """
         models = ["whisper-1"]
         for size in sorted(WHISPER_MODEL_SIZES):
             if size not in models:
                 models.append(size)
         return models
 
-    # ------------------------------------------------------------------
-    # Alignment
-    # ------------------------------------------------------------------
-
     def _ensure_align_model(self, language_code: str) -> tuple[Any, Any]:
-        """Load and cache the alignment model for a language."""
         if language_code in self._align_models:
             return self._align_models[language_code]
 
@@ -171,19 +121,13 @@ class WhisperXEngine:
 
         logger.info("Loading alignment model for language=%s ...", language_code)
         model_a, metadata = whisperx.load_align_model(
-            language_code=language_code,
-            device=settings.device,
+            language_code=language_code, device=settings.device,
         )
         self._align_models[language_code] = (model_a, metadata)
         logger.info("Alignment model loaded for language=%s", language_code)
         return model_a, metadata
 
-    # ------------------------------------------------------------------
-    # Diarization
-    # ------------------------------------------------------------------
-
     def _ensure_diarize_pipeline(self) -> Any:
-        """Load the pyannote diarization pipeline (requires HF_TOKEN)."""
         if self._diarize_pipeline is not None:
             return self._diarize_pipeline
 
@@ -191,23 +135,14 @@ class WhisperXEngine:
 
         hf_token = os.getenv("HF_TOKEN")
         if not hf_token:
-            raise RuntimeError(
-                "HF_TOKEN environment variable is required for speaker diarization. "
-                "Set it to a HuggingFace access token with read permissions for "
-                "pyannote/speaker-diarization-community-1."
-            )
+            raise RuntimeError("HF_TOKEN is required for speaker diarization.")
 
         logger.info("Loading diarization pipeline ...")
         self._diarize_pipeline = DiarizationPipeline(
-            token=hf_token,
-            device=settings.device,
+            token=hf_token, device=settings.device,
         )
         logger.info("Diarization pipeline loaded.")
         return self._diarize_pipeline
-
-    # ------------------------------------------------------------------
-    # Inference
-    # ------------------------------------------------------------------
 
     def transcribe(
         self,
@@ -220,19 +155,17 @@ class WhisperXEngine:
         word_timestamps: bool = False,
         diarize: bool = False,
     ) -> dict[str, Any]:
-        """Run the full WhisperX pipeline on audio data.
+        """Run the full WhisperX pipeline.
 
-        Returns a dict with keys: segments, language, text, duration.
-        Segments may include word-level timestamps and speaker labels.
+        Returns dict with keys: segments, language, text, duration.
         """
         import whisperx
 
         if self._model is None:
-            raise RuntimeError("Model not loaded -- call load() first")
+            raise RuntimeError("Model not loaded — call load() first")
 
         self.touch()
 
-        # Write audio bytes to a temporary file for whisperx
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
             tmp.write(audio_data)
             tmp_path = tmp.name
@@ -258,26 +191,21 @@ class WhisperXEngine:
         result = self._model.transcribe(audio, **transcribe_kwargs)
         detected_language = result.get("language", language or "en")
 
-        # 2. Align (for word-level timestamps)
+        # 2. Align (word-level timestamps)
         if word_timestamps:
             try:
                 model_a, metadata = self._ensure_align_model(detected_language)
                 result = whisperx.align(
-                    result["segments"],
-                    model_a,
-                    metadata,
-                    audio,
-                    settings.device,
-                    return_char_alignments=False,
+                    result["segments"], model_a, metadata, audio,
+                    settings.device, return_char_alignments=False,
                 )
             except Exception:
                 logger.warning(
                     "Alignment failed for language=%s, returning without word timestamps",
-                    detected_language,
-                    exc_info=True,
+                    detected_language, exc_info=True,
                 )
 
-        # 3. Diarize (for speaker labels)
+        # 3. Diarize (speaker labels)
         if diarize and settings.enable_diarization:
             try:
                 pipeline = self._ensure_diarize_pipeline()
@@ -289,14 +217,9 @@ class WhisperXEngine:
                     exc_info=True,
                 )
 
-        # Compute full text from segments
         segments = result.get("segments", [])
         full_text = " ".join(seg.get("text", "").strip() for seg in segments)
-
-        # Compute duration from last segment end
-        duration = 0.0
-        if segments:
-            duration = max(seg.get("end", 0.0) for seg in segments)
+        duration = max((seg.get("end", 0.0) for seg in segments), default=0.0)
 
         return {
             "segments": segments,
@@ -306,5 +229,4 @@ class WhisperXEngine:
         }
 
 
-# Module-level singleton
 engine = WhisperXEngine()

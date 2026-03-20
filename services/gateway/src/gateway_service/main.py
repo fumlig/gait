@@ -1,5 +1,3 @@
-"""FastAPI application entry point for the API gateway."""
-
 from __future__ import annotations
 
 import asyncio
@@ -34,14 +32,13 @@ logger = logging.getLogger(__name__)
 
 
 async def fetch_all_models(application: FastAPI) -> list[ModelObject]:
-    """Fetch models from all HTTP backends and merge (with deduplication)."""
+    """Fetch models from all HTTP backends, merge, and deduplicate."""
     backends: list[BaseBackend] = getattr(application.state, "backends", [])
 
     all_model_lists = await asyncio.gather(
         *(backend.fetch_models() for backend in backends)
     )
 
-    # Merge and deduplicate (first occurrence wins)
     seen: set[str] = set()
     merged: list[ModelObject] = []
     for model_list in all_model_lists:
@@ -64,9 +61,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
     )
     application.state._http_client = http_client
 
-    # ------------------------------------------------------------------
-    # Instantiate all backends whose env var is set
-    # ------------------------------------------------------------------
+    # Instantiate backends whose env var is set
     all_clients: list[object] = []
     backends: list[BaseBackend] = []
 
@@ -82,18 +77,13 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
 
     application.state.backends = backends
 
-    # ------------------------------------------------------------------
-    # Wire resource protocols → app.state slots via isinstance checks
-    # ------------------------------------------------------------------
+    # Wire resource protocols → app.state slots
     for client in all_clients:
         for protocol, slot in PROTOCOL_SLOTS:
             if isinstance(client, protocol):
                 setattr(application.state, slot, client)
                 logger.info("  %s → app.state.%s", type(client).__name__, slot)
 
-    # ------------------------------------------------------------------
-    # Initial model discovery
-    # ------------------------------------------------------------------
     merged = await fetch_all_models(application)
     logger.info("Model discovery complete — %d model(s)", len(merged))
 
@@ -112,7 +102,6 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# Permissive CORS for local usage
 app.add_middleware(
     CORSMiddleware,  # ty: ignore[invalid-argument-type]
     allow_origins=["*"],

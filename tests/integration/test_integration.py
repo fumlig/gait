@@ -1,17 +1,9 @@
-"""End-to-end integration tests for the trave gateway.
+"""Integration tests for the trave gateway.
 
-These tests connect to a **running** gateway (via docker compose) using the
-official OpenAI Python client.  Every test saves its output to
-``./test_outputs/`` so results can be inspected manually after a run.
+Requires a running gateway (docker compose up -d). Uses the OpenAI Python
+client. Outputs saved to ./test_outputs/ for manual inspection.
 
-Prerequisites:
-    docker compose up -d   # all services healthy
-    GATEWAY_URL env var     # defaults to http://localhost:3000
-
-Run:
-    cd tests/integration
-    uv sync
-    uv run pytest -v --tb=short
+    GATEWAY_URL defaults to http://localhost:3000
 """
 
 from __future__ import annotations
@@ -27,16 +19,9 @@ import httpx
 import pytest
 from openai import OpenAI
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
 
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:3000")
 OUTPUT_DIR = Path(__file__).parent / "test_outputs"
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _save(name: str, data: str | bytes, binary: bool = False) -> Path:
@@ -60,11 +45,6 @@ def _make_wav(duration_s: float = 1.0, sample_rate: int = 16000) -> bytes:
         wf.setframerate(sample_rate)
         wf.writeframes(b"\x00\x00" * num_samples)
     return buf.getvalue()
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
@@ -110,11 +90,6 @@ def models(raw_client: httpx.Client) -> dict[str, list[str]]:
     }
 
 
-# ---------------------------------------------------------------------------
-# 1. Health
-# ---------------------------------------------------------------------------
-
-
 class TestHealth:
     def test_health_endpoint(self, raw_client: httpx.Client):
         r = raw_client.get("/health")
@@ -128,11 +103,6 @@ class TestHealth:
         # At minimum speech + transcription should be present
         assert "speech" in data["backends"]
         assert "transcription" in data["backends"]
-
-
-# ---------------------------------------------------------------------------
-# 2. Models
-# ---------------------------------------------------------------------------
 
 
 class TestModels:
@@ -156,11 +126,6 @@ class TestModels:
             assert "capabilities" in m, f"Model {m['id']} missing capabilities"
             assert len(m["capabilities"]) > 0, f"Model {m['id']} has empty capabilities"
             assert "loaded" in m, f"Model {m['id']} missing loaded field"
-
-
-# ---------------------------------------------------------------------------
-# 3. Text-to-Speech (POST /v1/audio/speech)
-# ---------------------------------------------------------------------------
 
 
 class TestSpeech:
@@ -230,11 +195,6 @@ class TestSpeech:
             },
         )
         assert r.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# 4. Transcription (POST /v1/audio/transcriptions)
-# ---------------------------------------------------------------------------
 
 
 class TestTranscription:
@@ -332,12 +292,7 @@ class TestTranscription:
     def test_transcription_diarize(
         self, models: dict, tts_audio_wav: bytes, raw_client: httpx.Client
     ):
-        """Transcribe with diarization enabled.
-
-        If the server has ENABLE_DIARIZATION=true and a valid HF_TOKEN,
-        the response segments should contain speaker labels.  If diarization
-        is not configured, the transcription still succeeds without speakers.
-        """
+        """Transcribe with diarization enabled."""
         stt_model = models["stt"][0]
         r = raw_client.post(
             "/v1/audio/transcriptions",
@@ -393,11 +348,6 @@ class TestTranscription:
             files={"file": ("test.wav", _make_wav(), "audio/wav")},
         )
         assert r.status_code == 400
-
-
-# ---------------------------------------------------------------------------
-# 5. Translation (POST /v1/audio/translations)
-# ---------------------------------------------------------------------------
 
 
 class TestTranslation:
@@ -456,11 +406,6 @@ class TestTranslation:
         assert r.status_code == 200
         _save("translation.srt", r.text)
         assert "-->" in r.text
-
-
-# ---------------------------------------------------------------------------
-# 6. Voice management
-# ---------------------------------------------------------------------------
 
 
 class TestVoices:
@@ -590,22 +535,10 @@ class TestVoices:
         assert r.status_code == 404
 
 
-# ---------------------------------------------------------------------------
-# 7. Chat Completions (POST /v1/chat/completions)
-# ---------------------------------------------------------------------------
-
-
 class TestChatCompletions:
-    """Chat completion tests.
-
-    Note: Some LLMs (e.g. Qwen3) are *reasoning models* that generate
-    ``reasoning_content`` before ``content``.  Tests must account for
-    both kinds of output and use sufficient ``max_tokens``.
-    """
-
     @staticmethod
     def _get_message_text(message) -> str:
-        """Return the message text, preferring content but falling back to reasoning_content."""
+        """Return content, falling back to reasoning_content for reasoning models."""
         return message.content or getattr(message, "reasoning_content", "") or ""
 
     def test_chat_completion(self, client: OpenAI, models: dict):
@@ -700,11 +633,6 @@ class TestChatCompletions:
         assert len(text) > 0, "No content or reasoning_content in response"
 
 
-# ---------------------------------------------------------------------------
-# 8. Legacy Completions (POST /v1/completions)
-# ---------------------------------------------------------------------------
-
-
 class TestCompletions:
     def test_text_completion(self, client: OpenAI, models: dict):
         """Non-streaming legacy text completion."""
@@ -747,18 +675,7 @@ class TestCompletions:
         assert len(full_text) > 0
 
 
-# ---------------------------------------------------------------------------
-# 9. Responses API (POST /v1/responses)
-# ---------------------------------------------------------------------------
-
-
 class TestResponses:
-    """Test the OpenAI Responses API (POST /v1/responses).
-
-    This is the newer alternative to chat completions.  llama.cpp server
-    supports it natively and the gateway proxies transparently.
-    """
-
     def test_response_non_streaming(self, models: dict, raw_client: httpx.Client):
         """Non-streaming response returns structured output."""
         if not models["llm"]:
@@ -848,11 +765,6 @@ class TestResponses:
         assert len(data["output"]) > 0
 
 
-# ---------------------------------------------------------------------------
-# 10. Embeddings (POST /v1/embeddings)
-# --------------------------------------------------------------------------
-
-
 class TestEmbeddings:
     def test_single_embedding(self, client: OpenAI, models: dict):
         """Get embedding for a single string."""
@@ -886,11 +798,6 @@ class TestEmbeddings:
         assert len(resp.data) == 3
         for item in resp.data:
             assert len(item.embedding) > 0
-
-
-# ---------------------------------------------------------------------------
-# 11. Round-trip: TTS → STT
-# ---------------------------------------------------------------------------
 
 
 class TestRoundTrip:
@@ -939,25 +846,9 @@ class TestRoundTrip:
         )
 
 
-# ---------------------------------------------------------------------------
-# 12. Streaming chat with audio (POST /v1/chat/completions with modalities)
-# ---------------------------------------------------------------------------
-
-
 class TestChatAudio:
-    """Test the audio-interleaved streaming chat endpoint."""
-
     def test_chat_audio_stream(self, models: dict, raw_client: httpx.Client):
-        """Streaming chat with audio modality returns interleaved text+audio SSE.
-
-        Reasoning models (e.g. Qwen3) emit ``reasoning_content`` deltas
-        before ``content`` deltas.  The gateway's TTS interleaving only
-        synthesises ``content`` tokens, so we need enough ``max_tokens``
-        for the model to finish reasoning and start producing content.
-        We validate that *some* text (content or reasoning) was generated,
-        and that the audio interleaving machinery (id, data, transcript,
-        expires_at) works.
-        """
+        """Streaming with audio modality interleaves text and audio SSE events."""
         if not models["llm"] or not models["tts"]:
             pytest.skip("Need both LLM and TTS models")
 

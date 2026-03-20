@@ -1,5 +1,3 @@
-"""Audio route group — aggregates speech, transcription, translation, and voice routers."""
-
 from fastapi import APIRouter
 
 from gateway_service.routes.audio.speech import router as speech_router

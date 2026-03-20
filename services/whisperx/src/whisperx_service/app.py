@@ -1,16 +1,10 @@
-"""Minimal WhisperX STT service (Starlette).
-
-RPC-style backend for the gateway.  No OpenAI-compatible routing —
-just raw transcribe / translate / models / health endpoints.
-
-Models are loaded lazily on first request via ``engine.ensure_model``
-and unloaded automatically after a configurable idle timeout.
+"""WhisperX STT service (Starlette).
 
 Endpoints:
     POST /transcribe  - multipart (file + params) -> JSON segments
     POST /translate   - multipart (file + params) -> JSON segments
-    GET  /models      - list available models with loaded status
-    GET  /health      - liveness / readiness check
+    GET  /models      - available models with loaded status
+    GET  /health      - liveness / readiness
 """
 
 from __future__ import annotations
@@ -40,27 +34,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-# ---------------------------------------------------------------------------
-# Shared transcription logic
-# ---------------------------------------------------------------------------
-
-
 async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
-    """Shared handler for transcription and translation.
-
-    Reads multipart form data with ``file``, ``model``, and optional
-    ``language``, ``prompt``, ``temperature``, ``word_timestamps`` fields.
-    """
+    """Shared handler for transcription and translation."""
     form = await request.form()
 
     upload = form.get("file")
-    model_field = form.get("model", "")
-    model = str(model_field)
+    model = str(form.get("model", ""))
 
     if not model:
         return JSONResponse({"detail": "'model' is required."}, status_code=400)
 
-    # Ensure model is loaded (lazy loading)
     try:
         engine.ensure_model(model)
     except Exception as exc:
@@ -70,7 +53,6 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     if not engine.is_loaded:
         return JSONResponse({"detail": "Model is not loaded yet."}, status_code=503)
 
-    # Read and validate file
     from starlette.datastructures import UploadFile
 
     if not isinstance(upload, UploadFile):
@@ -86,28 +68,20 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
             status_code=400,
         )
 
-    # Optional params
     language = str(form.get("language", "")) or None
     prompt = str(form.get("prompt", "")) or None
     temperature = float(str(form.get("temperature", "0.0")))
-    word_timestamps_raw = str(form.get("word_timestamps", "false"))
-    want_words = word_timestamps_raw.lower() == "true"
+    want_words = str(form.get("word_timestamps", "false")).lower() == "true"
 
-    # Diarization: per-request opt-in via `diarize` field, but only if the
-    # server has diarization enabled in its config (ENABLE_DIARIZATION=true)
-    # AND a HuggingFace token is available (required by pyannote).
-    diarize_raw = str(form.get("diarize", "false"))
+    # Diarization: per-request opt-in, requires server config and HF_TOKEN
     want_diarize = (
-        diarize_raw.lower() == "true"
+        str(form.get("diarize", "false")).lower() == "true"
         and settings.enable_diarization
         and bool(os.getenv("HF_TOKEN"))
     )
-
-    # Diarization needs word-level alignment to assign speakers to words
     if want_diarize:
-        want_words = True
+        want_words = True  # diarization needs word alignment
 
-    # Run inference
     try:
         result = engine.transcribe(
             audio_data,
@@ -126,23 +100,15 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     return JSONResponse(result)
 
 
-# ---------------------------------------------------------------------------
-# Endpoints
-# ---------------------------------------------------------------------------
-
-
 async def transcribe(request: Request) -> JSONResponse:
-    """Transcribe audio to text (preserves source language)."""
     return await _do_transcribe(request, task="transcribe")
 
 
 async def translate(request: Request) -> JSONResponse:
-    """Translate audio to English text."""
     return await _do_transcribe(request, task="translate")
 
 
 async def list_models(request: Request) -> JSONResponse:
-    """Return available model list with capabilities and loaded status."""
     loaded_name = engine.loaded_model_name
     models = [
         {
@@ -159,7 +125,6 @@ async def list_models(request: Request) -> JSONResponse:
 
 
 async def health(request: Request) -> JSONResponse:
-    """Liveness / readiness check."""
     return JSONResponse(
         {
             "status": "ok",
@@ -169,17 +134,10 @@ async def health(request: Request) -> JSONResponse:
     )
 
 
-# ---------------------------------------------------------------------------
-# App
-# ---------------------------------------------------------------------------
-
-
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    """Optionally preload the default model, start idle checker."""
     idle_task = None
 
-    # Start idle timeout background task if configured
     if settings.model_idle_timeout > 0:
 
         async def _idle_checker() -> None:
@@ -193,14 +151,11 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
 
         idle_task = asyncio.create_task(_idle_checker())
 
-    # Optionally preload default model
     if settings.default_model:
         logger.info("Preloading default model: %s", settings.default_model)
         engine.load()
     else:
-        logger.info(
-            "No default model configured — models will be loaded lazily on first request."
-        )
+        logger.info("No default model — models will load lazily on first request.")
 
     yield
 

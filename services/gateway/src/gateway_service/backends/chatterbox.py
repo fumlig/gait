@@ -1,7 +1,4 @@
-"""Chatterbox backend client — calls the chatterbox TTS /synthesize endpoint.
-
-Implements :class:`~gateway_service.protocols.AudioSpeech`.
-"""
+"""Chatterbox backend client — TTS via the /synthesize endpoint."""
 
 from __future__ import annotations
 
@@ -20,33 +17,18 @@ logger = logging.getLogger(__name__)
 
 
 class ChatterboxClient(BaseBackend, AudioSpeech):
-    """Typed HTTP client for the chatterbox speech (TTS) backend.
-
-    Calls chatterbox's RPC endpoints:
-    - POST /synthesize  (JSON body → audio/wav binary)
-    """
-
     name = "chatterbox"
     env_var = "CHATTERBOX_URL"
     default_model_capabilities: ClassVar[list[str]] = ["speech"]
 
     async def synthesize(self, request: SpeechRequest) -> tuple[bytes, str]:
-        """Send a synthesize request and return (wav_bytes, content_type).
-
-        Maps the OpenAI-compatible ``input`` field to the backend's ``text``
-        field.  Strips ``response_format`` since the backend always returns
-        WAV — format conversion is the gateway's responsibility.
-        """
+        """Send a synthesize request and return (wav_bytes, content_type)."""
         url = f"{self._base_url}/synthesize"
 
-        # Build payload: exclude None values so backend applies its defaults.
+        # Build payload, mapping OpenAI's "input" to backend's "text"
         payload = request.model_dump(exclude_none=True)
-
-        # Map OpenAI field name → backend field name
         payload["text"] = payload.pop("input")
-
-        # Strip response_format — backend always returns WAV
-        payload.pop("response_format", None)
+        payload.pop("response_format", None)  # backend always returns WAV
 
         resp = await self._http_client.post(url, json=payload)
 

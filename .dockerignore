@@ -1,29 +1,16 @@
-# VCS
 .git/
 .gitignore
-
-# Python artifacts
 **/__pycache__/
 **/*.pyc
 **/*.pyo
 **/*.egg-info/
-
-# Virtual environments (6+ GB each)
 **/.venv/
-
-# Dev tooling caches
 **/.ruff_cache/
 **/.pytest_cache/
 **/.mypy_cache/
-
-# Tests and docs (not needed in images)
 **/tests/
 **/README.md
 AGENTS.md
-
-# Host data directories
 voices/
 models/
-
-# Environment (secrets)
 .env

@@ -1,5 +1,3 @@
-"""POST /v1/audio/transcriptions — OpenAI-compatible STT endpoint."""
-
 from __future__ import annotations
 
 import logging
@@ -21,7 +19,6 @@ router = APIRouter()
 
 
 def _get_transcription_client(request: Request) -> AudioTranscriptions:
-    """Resolve the transcription client from app state."""
     client = getattr(request.app.state, "audio_transcriptions", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No transcription backend configured.")
@@ -40,22 +37,16 @@ async def create_transcription(
     timestamp_granularities: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     diarize: str = Form("false"),
 ) -> Response:
-    """Transcribe audio into text.
-
-    Set ``diarize=true`` to enable speaker diarization (requires
-    ``ENABLE_DIARIZATION=true`` on the backend and a valid ``HF_TOKEN``).
-    """
     client = _get_transcription_client(request)
 
-    # Validate response format
     try:
         fmt = TranscriptionResponseFormat(response_format)
     except ValueError:
         raise HTTPException(
             status_code=400,
             detail=(
-                f"Invalid response_format '{response_format}'. "
-                f"Use one of: json, text, srt, verbose_json, vtt."
+                f"Invalid response_format '{response_format}'."
+                " Use one of: json, text, srt, verbose_json, vtt."
             ),
         ) from None
 
@@ -64,10 +55,8 @@ async def create_transcription(
         raise HTTPException(status_code=400, detail="Empty audio file.")
 
     filename = file.filename or "audio.wav"
-
     want_diarize = diarize.lower() == "true"
 
-    # Determine if we need word timestamps based on format / granularity / diarize
     want_words = (
         fmt == TranscriptionResponseFormat.verbose_json
         or (timestamp_granularities is not None and "word" in timestamp_granularities)

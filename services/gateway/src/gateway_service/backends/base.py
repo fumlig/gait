@@ -1,9 +1,7 @@
-"""Base class for HTTP backend service clients.
+"""Base class for HTTP backend clients.
 
-Provides shared model discovery, health checking, and a factory
-``create`` classmethod for uniform instantiation from environment
-variables.  Concrete clients extend this class and implement one or
-more resource protocols from :pymod:`gateway_service.protocols`.
+Provides model discovery, health checking, and a create classmethod
+for uniform instantiation from environment variables.
 """
 
 from __future__ import annotations
@@ -24,25 +22,13 @@ logger = logging.getLogger(__name__)
 class BaseBackend:
     """Shared implementation for HTTP-based backend clients.
 
-    Subclasses must set ``name``, ``env_var``, and
-    ``default_model_capabilities``.  Override ``models_path`` if the
-    backend uses a non-standard path (e.g. ``/v1/models``).
-
-    Which resource protocols a client implements determines which
-    ``app.state`` slots it fills — see :pymod:`gateway_service.protocols`.
+    Subclasses set name, env_var, and default_model_capabilities.
     """
 
     name: str
-    """Human-readable name used in logs and health responses."""
-
     env_var: str
-    """Environment variable that holds this backend's URL."""
-
     default_model_capabilities: ClassVar[list[str]]
-    """Model-level capabilities injected when a model doesn't self-report."""
-
     models_path: str = "/models"
-    """Path to the model listing endpoint."""
 
     def __init__(self, *, base_url: str, http_client: httpx.AsyncClient) -> None:
         self._base_url = base_url.rstrip("/")
@@ -50,7 +36,6 @@ class BaseBackend:
 
     @classmethod
     def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Self:
-        """Instantiate from an environment variable value."""
         return cls(base_url=env_value, http_client=http_client)
 
     @property
@@ -65,9 +50,7 @@ class BaseBackend:
             if resp.status_code != 200:
                 logger.warning(
                     "Model discovery failed for %s (%s): HTTP %d",
-                    self.name,
-                    url,
-                    resp.status_code,
+                    self.name, url, resp.status_code,
                 )
                 return []
             data = resp.json()
@@ -87,15 +70,12 @@ class BaseBackend:
             return result
         except Exception:
             logger.warning(
-                "Model discovery failed for %s (%s) — it may not be ready yet",
-                self.name,
-                url,
-                exc_info=True,
+                "Model discovery failed for %s (%s) — may not be ready yet",
+                self.name, url, exc_info=True,
             )
             return []
 
     async def check_health(self) -> dict:
-        """Check GET /health on the backend."""
         url = f"{self._base_url}/health"
         try:
             resp = await self._http_client.get(url, timeout=5.0)

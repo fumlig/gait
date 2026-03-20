@@ -1,5 +1,3 @@
-"""POST /v1/embeddings — proxied to llama.cpp server."""
-
 from __future__ import annotations
 
 import logging
@@ -17,7 +15,6 @@ router = APIRouter()
 
 
 def _get_embeddings_client(request: Request) -> Embeddings:
-    """Resolve the embeddings client from app state."""
     client = getattr(request.app.state, "embeddings", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No embeddings backend configured.")
@@ -26,10 +23,6 @@ def _get_embeddings_client(request: Request) -> Embeddings:
 
 @router.post("/v1/embeddings")
 async def embeddings(request: Request) -> JSONResponse:
-    """Create embeddings for the given input.
-
-    Transparently proxies the request to the llama.cpp server backend.
-    """
     client = _get_embeddings_client(request)
     body = await request.json()
 

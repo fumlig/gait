@@ -1,5 +1,3 @@
-"""POST /v1/completions — legacy completions, proxied to llama.cpp server."""
-
 from __future__ import annotations
 
 import logging
@@ -19,7 +17,6 @@ router = APIRouter()
 
 
 def _get_completions_client(request: Request) -> Completions:
-    """Resolve the completions client from app state."""
     client = getattr(request.app.state, "completions", None)
     if client is None:
         raise HTTPException(status_code=503, detail="No completions backend configured.")
@@ -28,11 +25,6 @@ def _get_completions_client(request: Request) -> Completions:
 
 @router.post("/v1/completions", response_model=None)
 async def completions(request: Request) -> JSONResponse | StreamingResponse:
-    """Create a text completion.
-
-    Transparently proxies the request to the llama.cpp server backend.
-    Supports both streaming (``"stream": true``) and non-streaming responses.
-    """
     client = _get_completions_client(request)
     body = await request.json()
 

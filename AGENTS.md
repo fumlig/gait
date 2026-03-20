@@ -4,14 +4,14 @@ Context and conventions for AI agents working on this repository.
 
 ## Project overview
 
-Trave exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway handles all OpenAI protocol concerns (request validation, response formatting, model listing). Each ML model runs as a thin backend service in its own Docker container with GPU passthrough, exposing low-level RPC-style endpoints via Starlette. Voice management runs as a separate lightweight service sharing a volume with the TTS backend.
+Trave exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway handles all OpenAI protocol concerns (request validation, response formatting, model listing). Each ML model runs as a thin backend service in its own Docker container with GPU passthrough, exposing low-level RPC-style endpoints via Starlette.
 
 ## Architecture
 
 ```
                    ┌────────────────────┐
                    │      Gateway       │  FastAPI, OpenAI-compatible API
-                   │    (port 8080)     │  Format conversion, model list cache
+                   │    (port 3000)     │  Format conversion, model list cache
                    │                    │  Voice management (local filesystem)
                    └──┬──────┬──────┬──┘
                       │      │      │
@@ -187,7 +187,7 @@ RUN add-apt-repository -y ppa:deadsnakes/ppa \
 Many model repos require authentication. Always pass `HF_TOKEN` through docker-compose and check that `from_pretrained` uses it. The chatterbox library reads `os.getenv("HF_TOKEN")`.
 
 ### Transitive bloat
-Some ML packages pull in large unnecessary dependencies (e.g., `chatterbox-tts` installs `gradio` at 57MB). Consider excluding them if image size matters, but be careful -- some packages import them at module level.
+Some ML packages pull in large unnecessary dependencies. Consider excluding them if image size matters, but be careful -- some packages import them at module level.
 
 ## Testing
 
@@ -241,7 +241,7 @@ Each service has its own `.venv/`. Point your IDE's Python interpreter to the se
 
 ### Caveats
 - `.venv/` directories are gitignored. Always run `uv sync --all-extras` after cloning.
-- Do not use the system Python directly. The system may run a different version (e.g. 3.14) which will cause import or build failures.
+- Do not use the system Python directly. The system may run a different version which will cause import or build failures.
 - If a `.venv` was created with the wrong Python version, delete it and re-run `uv sync --all-extras`.
 
 ## Hosting as a self-hosted service
@@ -275,7 +275,7 @@ systemctl status trave
 The unit uses `docker compose up -d --wait` which blocks until all healthchecks pass, and `docker compose down` for clean shutdown. `TimeoutStartSec=600` gives enough time for first-run model downloads.
 
 ### Docker build caching
-- A root `.dockerignore` excludes `.venv/` directories (13+ GB), `.git/`, test files, and other artifacts from the build context.
+- A root `.dockerignore` excludes `.venv/` directories, `.git/`, test files, and other artifacts from the build context.
 - Dockerfiles use `--mount=type=cache,target=/root/.cache/uv` so uv's download cache persists across builds. Rebuilds after source-only changes skip all dependency downloads.
 - `uv.lock` is copied alongside `pyproject.toml` and `--frozen` is passed to `uv sync`, ensuring reproducible, faster resolution without re-solving.
 - BuildKit is required (default with Docker Compose v2 / Docker Engine 23+).
