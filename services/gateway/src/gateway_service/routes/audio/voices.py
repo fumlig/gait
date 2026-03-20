@@ -24,7 +24,7 @@ def _get_voice_client(request: Request) -> VoiceClient:
 
 
 @router.get("/v1/audio/voices")
-async def list_voices(request: Request) -> dict:
+async def list_voices(request: Request) -> dict[str, object]:
     """List all available voices."""
     client = _get_voice_client(request)
     voices = await client.list_voices()
@@ -35,7 +35,7 @@ async def list_voices(request: Request) -> dict:
 
 
 @router.get("/v1/audio/voices/{name}")
-async def get_voice(name: str, request: Request) -> dict:
+async def get_voice(name: str, request: Request) -> dict[str, str]:
     """Get a single voice by name."""
     client = _get_voice_client(request)
     voice = await client.get_voice(name)
@@ -47,7 +47,7 @@ async def create_voice(
     request: Request,
     name: str = Form(..., description="Name for the new voice."),
     file: UploadFile = File(..., description="WAV audio sample for voice cloning."),
-) -> dict:
+) -> dict[str, str]:
     """Upload a new voice reference clip."""
     client = _get_voice_client(request)
 
@@ -60,7 +60,7 @@ async def create_voice(
 
 
 @router.delete("/v1/audio/voices/{name}")
-async def delete_voice(name: str, request: Request) -> dict:
+async def delete_voice(name: str, request: Request) -> dict[str, object]:
     """Delete a voice by name."""
     client = _get_voice_client(request)
     return await client.delete_voice(name)

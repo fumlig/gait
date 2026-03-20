@@ -94,7 +94,7 @@ trave/
 - One folder per service under `services/`.
 - Each service is an independent Python project with its own `pyproject.toml`.
 - No shared library -- each service defines its own types.
-- Use `uv` for dependency management, `ruff` for linting, `pytest` for testing.
+- Use `uv` for dependency management, `ruff` for linting, `ty` for type checking, `pytest` for testing.
 - Every service gets its own `README.md` with endpoint docs, config table, and build notes.
 
 ### Backend services (chatterbox, whisperx)
@@ -190,6 +190,7 @@ Some ML packages pull in large unnecessary dependencies (e.g., `chatterbox-tts` 
 - Gateway tests mock the client classes (no real HTTP calls to backends).
 - Run: `uv run pytest` from the service directory.
 - Lint: `uv run ruff check src/`
+- Type check: `uvx ty check` from the service directory.
 
 ## Adding a new service -- checklist
 
@@ -205,7 +206,7 @@ Some ML packages pull in large unnecessary dependencies (e.g., `chatterbox-tts` 
 10. Write tests with mocked engine (backend) or mocked client (gateway).
 11. Write `README.md` with endpoints, config, and build notes.
 12. Update root `README.md` models table.
-13. Run `ruff check` and `pytest` before committing.
+13. Run `ruff check`, `ty check`, and `pytest` before committing.
 
 ## Local development
 
@@ -222,11 +223,13 @@ From any service directory:
 ```bash
 uv sync --all-extras   # creates .venv with the pinned Python, installs all deps + dev tools
 uv run ruff check src/ # lint
+uvx ty check           # type check (uses .venv for third-party stubs)
 uv run pytest          # tests (engines are mocked, no GPU needed)
 ```
 
 ### IDE configuration
 Each service has its own `.venv/`. Point your IDE's Python interpreter to the service you're working on:
+- **Zed**: Project-level `.zed/settings.json` configures `ty` (type checking) and `ruff` (linting + formatting) as language servers. Both run on every keystroke / save. Requires `ty` and `ruff` on `$PATH` (`uv tool install ty ruff`). Install no extra extensions — the config uses the binaries directly.
 - VS Code: set `python.defaultInterpreterPath` in `.vscode/settings.json`, or use the Python interpreter picker per workspace folder.
 - PyCharm: configure each service directory as a separate module with its own interpreter.
 

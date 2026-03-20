@@ -7,7 +7,7 @@ import time
 
 from fastapi import APIRouter, Request
 
-from gateway_service.models import ModelListResponse
+from gateway_service.models import ModelListResponse, ModelObject
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ router = APIRouter()
 _MODELS_CACHE_TTL = 10
 
 
-async def _get_models(request: Request) -> list:
+async def _get_models(request: Request) -> list[ModelObject]:
     """Return the model list, refreshing from backends if the cache is stale."""
     last_fetch = getattr(request.app.state, "models_fetched_at", 0)
     now = time.monotonic()

@@ -163,8 +163,8 @@ async def _synth_and_emit(
 # ---------------------------------------------------------------------------
 
 
-@router.post("/v1/chat/completions")
-async def chat_completions(request: Request):
+@router.post("/v1/chat/completions", response_model=None)
+async def chat_completions(request: Request) -> JSONResponse | StreamingResponse:
     """Create a chat completion.
 
     Transparently proxies the request to the llama.cpp server backend.

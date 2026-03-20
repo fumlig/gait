@@ -11,6 +11,8 @@ from gateway_service.formatting import format_transcription
 from gateway_service.models import TranscriptionResponseFormat
 
 if TYPE_CHECKING:
+    from starlette.responses import Response
+
     from gateway_service.clients.transcription import TranscriptionClient
 
 logger = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ def _get_transcription_client(request: Request) -> TranscriptionClient:
     return client
 
 
-@router.post("/v1/audio/transcriptions")
+@router.post("/v1/audio/transcriptions", response_model=None)
 async def create_transcription(
     request: Request,
     file: UploadFile = File(...),
@@ -37,7 +39,7 @@ async def create_transcription(
     temperature: float = Form(0.0),
     timestamp_granularities: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     diarize: str = Form("false"),
-):
+) -> Response:
     """Transcribe audio into text.
 
     Set ``diarize=true`` to enable speaker diarization (requires

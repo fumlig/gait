@@ -127,20 +127,22 @@ class ChatterboxEngine:
 
         logger.info("Loading %s on device=%s ...", model_name, settings.device)
 
+        device = torch.device(settings.device)
+
         if model_name == "chatterbox-turbo":
             from chatterbox.tts_turbo import ChatterboxTurboTTS
 
-            model = ChatterboxTurboTTS.from_pretrained(device=settings.device)
+            model = ChatterboxTurboTTS.from_pretrained(device=device)
 
         elif model_name == "chatterbox":
             from chatterbox.tts import ChatterboxTTS
 
-            model = ChatterboxTTS.from_pretrained(device=settings.device)
+            model = ChatterboxTTS.from_pretrained(device=device)
 
         elif model_name == "chatterbox-multilingual":
             from chatterbox.mtl_tts import ChatterboxMultilingualTTS
 
-            model = ChatterboxMultilingualTTS.from_pretrained(device=settings.device)
+            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
 
         else:
             raise ValueError(f"Unknown model: {model_name}")

@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _build_model_list() -> list[dict]:
+def _build_model_list() -> list[dict[str, object]]:
     """Build the model list with capabilities and loaded status."""
     loaded = engine.loaded_models
     return [

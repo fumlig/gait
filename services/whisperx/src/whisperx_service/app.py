@@ -54,14 +54,15 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     form = await request.form()
 
     upload = form.get("file")
-    model = form.get("model", "")
+    model_field = form.get("model", "")
+    model = str(model_field)
 
     if not model:
         return JSONResponse({"detail": "'model' is required."}, status_code=400)
 
     # Ensure model is loaded (lazy loading)
     try:
-        engine.ensure_model(str(model))
+        engine.ensure_model(model)
     except Exception as exc:
         logger.exception("Failed to load model '%s'", model)
         return JSONResponse({"detail": str(exc)}, status_code=400)
@@ -70,7 +71,9 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
         return JSONResponse({"detail": "Model is not loaded yet."}, status_code=503)
 
     # Read and validate file
-    if upload is None:
+    from starlette.datastructures import UploadFile
+
+    if not isinstance(upload, UploadFile):
         return JSONResponse({"detail": "No audio file uploaded."}, status_code=400)
 
     audio_data = await upload.read()
@@ -84,9 +87,9 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
         )
 
     # Optional params
-    language = form.get("language") or None
-    prompt = form.get("prompt") or None
-    temperature = float(form.get("temperature", 0.0))
+    language = str(form.get("language", "")) or None
+    prompt = str(form.get("prompt", "")) or None
+    temperature = float(str(form.get("temperature", "0.0")))
     word_timestamps_raw = str(form.get("word_timestamps", "false"))
     want_words = word_timestamps_raw.lower() == "true"
 
@@ -104,20 +107,17 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     if want_diarize:
         want_words = True
 
-    # Build kwargs (only pass language for transcribe, not translate)
-    transcribe_kwargs: dict = {
-        "prompt": prompt,
-        "temperature": temperature,
-        "task": task,
-        "word_timestamps": want_words,
-        "diarize": want_diarize,
-    }
-    if task == "transcribe" and language:
-        transcribe_kwargs["language"] = language
-
     # Run inference
     try:
-        result = engine.transcribe(audio_data, **transcribe_kwargs)
+        result = engine.transcribe(
+            audio_data,
+            language=language if task == "transcribe" else None,
+            prompt=prompt,
+            temperature=temperature,
+            task=task,
+            word_timestamps=want_words,
+            diarize=want_diarize,
+        )
     except Exception:
         label = "Transcription" if task == "transcribe" else "Translation"
         logger.exception("%s failed", label)

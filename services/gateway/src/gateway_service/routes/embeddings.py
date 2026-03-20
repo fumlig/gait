@@ -25,7 +25,7 @@ def _get_chat_client(request: Request) -> ChatClient:
 
 
 @router.post("/v1/embeddings")
-async def embeddings(request: Request):
+async def embeddings(request: Request) -> JSONResponse:
     """Create embeddings for the given input.
 
     Transparently proxies the request to the llama.cpp server backend.

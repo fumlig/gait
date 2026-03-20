@@ -11,6 +11,8 @@ from gateway_service.formatting import format_transcription
 from gateway_service.models import TranscriptionResponseFormat
 
 if TYPE_CHECKING:
+    from starlette.responses import Response
+
     from gateway_service.clients.transcription import TranscriptionClient
 
 logger = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ def _get_transcription_client(request: Request) -> TranscriptionClient:
     return client
 
 
-@router.post("/v1/audio/translations")
+@router.post("/v1/audio/translations", response_model=None)
 async def create_translation(
     request: Request,
     file: UploadFile = File(...),
@@ -34,7 +36,7 @@ async def create_translation(
     prompt: str | None = Form(None),
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
-):
+) -> Response:
     """Translate audio into English text."""
     client = _get_transcription_client(request)
 

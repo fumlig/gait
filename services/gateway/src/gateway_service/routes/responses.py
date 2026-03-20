@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 if TYPE_CHECKING:
+    from starlette.responses import StreamingResponse
+
     from gateway_service.clients.chat import ChatClient
 
 logger = logging.getLogger(__name__)
@@ -24,8 +26,8 @@ def _get_chat_client(request: Request) -> ChatClient:
     return client
 
 
-@router.post("/v1/responses")
-async def create_response(request: Request):
+@router.post("/v1/responses", response_model=None)
+async def create_response(request: Request) -> JSONResponse | StreamingResponse:
     """Create a model response.
 
     Transparently proxies the request to the llama.cpp server backend.
