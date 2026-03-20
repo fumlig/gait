@@ -3,7 +3,7 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Trave Chat</title>
+        <title>Gait Chat</title>
         <style>
             *,
             *::before,
@@ -288,7 +288,7 @@
     <body>
         <header>
             <hgroup>
-                <h1>Trave Chat</h1>
+                <h1>Gait Chat</h1>
                 <p>Local AI, OpenAI-compatible</p>
             </hgroup>
             <details>
@@ -760,9 +760,7 @@ You are a helpful assistant.</textarea
                             userInput.value = await transcribe(blob);
                         } catch (e) {
                             if (!userInput.value) {
-                                toast(
-                                    `Transcription failed: ${e.message}`,
-                                );
+                                toast(`Transcription failed: ${e.message}`);
                             }
                         }
                         userInput.disabled = false;

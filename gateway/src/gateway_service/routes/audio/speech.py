@@ -7,6 +7,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
 
 from gateway_service.models import SpeechRequest, SpeechResponseFormat
+from gateway_service.text_preprocessing import preprocess_speech_text
 
 if TYPE_CHECKING:
     from gateway_service.providers.protocols import AudioSpeech
@@ -36,6 +37,8 @@ _FORMAT_CONTENT_TYPES: dict[SpeechResponseFormat, str] = {
 @router.post("/v1/audio/speech")
 async def create_speech(body: SpeechRequest, request: Request) -> Response:
     client = _get_speech_client(request)
+
+    body.input = preprocess_speech_text(body.input)
 
     try:
         wav_bytes, _ = await client.synthesize(body)
