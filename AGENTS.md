@@ -4,7 +4,7 @@ Context and conventions for AI agents working on this repository.
 
 ## Project overview
 
-Gait exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway handles all OpenAI protocol concerns (request validation, response formatting, model listing). Each ML model runs as a thin backend service in its own Docker container with GPU passthrough, exposing low-level RPC-style endpoints via Starlette.
+Gait exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway handles all OpenAI protocol concerns (request validation, response formatting, model listing). Each ML model runs as a thin service in its own Docker container with GPU passthrough, exposing low-level RPC-style endpoints via Starlette.
 
 ## Architecture
 
@@ -31,8 +31,8 @@ Gait exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway 
 
 - **Gateway** owns the OpenAI API contract: request/response schemas, format conversion (WAV→MP3, segments→SRT/VTT), model list caching. Also handles voice management directly on a local directory (shared volume with chatterbox).
 - **llamacpp** runs the upstream llama.cpp server image directly. Already OpenAI-compatible — the gateway proxies requests transparently. No custom application code.
-- **Backends** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no gait-common.
-- **Clients** live in the gateway's `backends/` module. Each backend client extends `BaseBackend` (for HTTP backends) and implements resource protocols from `protocols.py`. The gateway auto-discovers which clients to instantiate based on environment variables (`LLAMACPP_URL`, `CHATTERBOX_URL`, `WHISPERX_URL`, `VOICES_DIR`).
+- **Services** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no gait-common.
+- **Provider clients** live in the gateway's `providers/` module. Each provider client extends `BaseProvider` (for HTTP providers) and implements resource protocols from `protocols.py`. The gateway auto-discovers which clients to instantiate based on environment variables (`LLAMACPP_URL`, `CHATTERBOX_URL`, `WHISPERX_URL`, `VOICES_DIR`).
 
 ## Repository structure
 
@@ -41,47 +41,47 @@ gait/
   docker-compose.yml          # orchestrates all services
   .env                        # (optional) host-level env vars
   AGENTS.md                   # this file
+  gateway/                    # FastAPI OpenAI-compatible gateway
+    src/gateway_service/
+      main.py                # FastAPI app + lifespan
+      config.py              # pydantic-settings
+      models.py              # shared response schemas
+      formatting.py          # response format conversion
+      providers/
+        protocols.py         # Resource protocols (ChatCompletions, AudioSpeech, etc.)
+        base.py              # BaseProvider base class (health, models, create)
+        __init__.py          # KNOWN_PROVIDERS registry, Registerable protocol
+        llamacpp.py          # LlamacppClient — transparent proxy for llama.cpp
+        chatterbox.py        # ChatterboxClient — TTS via chatterbox
+        whisperx.py          # WhisperxClient — STT via whisperx
+        voice.py             # VoiceClient — local filesystem voice management
+      routes/
+        health.py            # GET /health
+        models.py            # GET /v1/models
+        completions.py       # POST /v1/completions
+        responses.py         # POST /v1/responses
+        embeddings.py        # POST /v1/embeddings
+        chat/
+          completions.py     # POST /v1/chat/completions
+        audio/
+          speech.py          # POST /v1/audio/speech
+          transcriptions.py  # POST /v1/audio/transcriptions
+          translations.py    # POST /v1/audio/translations
+          voices.py          # voice management (local filesystem)
+    tests/
+      test_api.py            # pytest + httpx, mocked clients
   services/
-    gateway/                   # FastAPI OpenAI-compatible gateway
-      src/gateway_service/
-        main.py                # FastAPI app + lifespan
-        config.py              # pydantic-settings
-        models.py              # shared response schemas
-        formatting.py          # response format conversion
-        protocols.py           # Resource protocols (ChatCompletions, AudioSpeech, etc.)
-        backends/
-          base.py              # BaseBackend base class (health, models, create)
-          __init__.py          # KNOWN_BACKENDS registry, Registerable protocol
-          llamacpp.py          # LlamacppClient — transparent proxy for llama.cpp
-          chatterbox.py        # ChatterboxClient — TTS via chatterbox
-          whisperx.py          # WhisperxClient — STT via whisperx
-          voice.py             # VoiceClient — local filesystem voice management
-        routes/
-          health.py            # GET /health
-          models.py            # GET /v1/models
-          completions.py     # POST /v1/completions
-          responses.py       # POST /v1/responses
-          embeddings.py      # POST /v1/embeddings
-          chat/
-            completions.py   # POST /v1/chat/completions
-          audio/
-            speech.py          # POST /v1/audio/speech
-            transcriptions.py  # POST /v1/audio/transcriptions
-            translations.py    # POST /v1/audio/translations
-            voices.py          # voice management (proxied to voice service)
-      tests/
-        test_api.py            # pytest + httpx, mocked clients
-    llamacpp/                  # LLM backend (upstream llama.cpp image)
+    llamacpp/                  # LLM service (upstream llama.cpp image)
       Dockerfile               # thin wrapper around ghcr.io/ggml-org/llama.cpp
       README.md                # service docs
-    chatterbox/                # TTS backend (Starlette)
+    chatterbox/                # TTS service (Starlette)
       src/chatterbox_service/
         app.py                 # Starlette app (RPC endpoints)
         config.py              # pydantic-settings
         engine.py              # model loading + inference singleton
       tests/
         test_api.py            # pytest + httpx, mocked engine
-    whisperx/                  # STT backend (Starlette)
+    whisperx/                  # STT service (Starlette)
       src/whisperx_service/
         app.py                 # Starlette app (RPC endpoints)
         config.py              # pydantic-settings
@@ -94,7 +94,7 @@ gait/
 ## Conventions
 
 ### Services
-- One folder per service under `services/`.
+- The gateway lives at `gateway/` (top level). Optional backend services live under `services/`.
 - Each service is an independent Python project with its own `pyproject.toml`.
 - No shared library -- each service defines its own types.
 - Use `uv` for dependency management, `ruff` for linting, `ty` for type checking, `pytest` for testing.
@@ -108,23 +108,23 @@ gait/
 
 ### Gateway
 - FastAPI app. Owns all OpenAI API contract concerns.
-- `backends/` module contains typed client classes, one per backend type. `protocols.py` defines resource protocols (one per OpenAI endpoint group).
-- HTTP backends extend `BaseBackend` (shared health/models) and implement resource protocols (e.g. `AudioSpeech`, `ChatCompletions`). The `VoiceClient` implements `AudioVoices` directly.
-- Each class declares `env_var` and a `create` classmethod. At startup the gateway iterates `KNOWN_BACKENDS`, checks `os.environ` for each class's env var, and calls `create` to instantiate only those whose variable is set.
+- `providers/` module contains typed provider client classes, one per provider type. `protocols.py` defines resource protocols (one per OpenAI endpoint group).
+- HTTP providers extend `BaseProvider` (shared health/models) and implement resource protocols (e.g. `AudioSpeech`, `ChatCompletions`). The `VoiceClient` implements `AudioVoices` directly.
+- Each class declares `env_var` and a `create` classmethod. At startup the gateway iterates `KNOWN_PROVIDERS`, checks `os.environ` for each class's env var, and calls `create` to instantiate only those whose variable is set.
 - Protocol wiring is automatic: the gateway uses `isinstance` checks against each resource protocol to determine which `app.state` slot a client fills. No explicit capabilities list needed.
 - Route modules mirror OpenAI API resource grouping: `chat/`, `completions`, `responses`, `embeddings`, `audio/`.
-- Models are fetched from each backend's `fetch_models()` at startup and cached on `app.state.models`.
+- Models are fetched from each provider's `fetch_models()` at startup and cached on `app.state.models`.
 - Format conversion (WAV→MP3, segments→SRT/VTT) happens in the gateway.
 
 ### Voice management
-- Voice CRUD is handled inside the gateway via a local filesystem client (`backends/voice.py`).
+- Voice CRUD is handled inside the gateway via a local filesystem client (`providers/voice.py`).
 - The `VOICES_DIR` directory is shared with chatterbox via a Docker volume for voice resolution.
 - No separate service or container — the gateway reads/writes WAV files directly.
 
 ### API design
 - The gateway matches the OpenAI API contract for the relevant modality (TTS, STT).
-- Gateway implements `GET /v1/models` (merged from backends) and `GET /health` (aggregated).
-- Backends implement `GET /models` and `GET /health` (no `/v1/` prefix).
+- Gateway implements `GET /v1/models` (merged from providers) and `GET /health` (aggregated).
+- Services implement `GET /models` and `GET /health` (no `/v1/` prefix).
 - Accept and ignore `Authorization` headers (local use, no auth).
 - Return proper HTTP error codes: 400 for bad input, 503 for model not loaded, 500 for inference failures.
 
@@ -153,7 +153,7 @@ gait/
 - No env prefix -- variables map directly (e.g., `DEVICE=cuda`).
 - Expose all tunables: device, host, port, data dirs, limits.
 
-### Engine pattern (GPU backends only)
+### Engine pattern (GPU services only)
 - Module-level singleton instance created at import time.
 - `load()` called during Starlette lifespan startup, `unload()` on shutdown.
 - Lazy import of the ML library inside `load()` to avoid import-time GPU init.
@@ -192,26 +192,26 @@ Some ML packages pull in large unnecessary dependencies. Consider excluding them
 ## Testing
 
 - Unit tests use `httpx.AsyncClient` against the Starlette/FastAPI test transport.
-- Backends mock the engine singleton to avoid GPU/model requirements in CI.
-- Gateway tests mock the client classes (no real HTTP calls to backends).
+- Services mock the engine singleton to avoid GPU/model requirements in CI.
+- Gateway tests mock the provider client classes (no real HTTP calls to services).
 - Run: `uv run pytest` from the service directory.
 - Lint: `uv run ruff check src/`
 - Type check: `uvx ty check` from the service directory.
 
 ## Adding a new service -- checklist
 
-1. Create `services/<name>/` directory structure (mirror chatterbox or voice).
+1. Create `services/<name>/` directory structure (mirror chatterbox or whisperx).
 2. Write `pyproject.toml` with deps, ruff config, pytest config.
-3. For GPU backends: implement `config.py`, `engine.py`, `app.py` (Starlette).
+3. For GPU services: implement `config.py`, `engine.py`, `app.py` (Starlette).
 4. For non-GPU services: implement `config.py`, `app.py` (Starlette).
 5. Expose RPC endpoints + `/models` + `/health`.
 6. Write `Dockerfile` with configurable ARGs/ENVs.
 7. Add service to `docker-compose.yml` with configurable port, volumes, env vars.
-8. Add a typed client in `services/gateway/src/gateway_service/backends/` that extends `BaseBackend` and implements the relevant resource protocols from `protocols.py`. Add a `create` classmethod and register it in `KNOWN_BACKENDS` in `backends/__init__.py`.
-9. Add gateway route(s) that map OpenAI API to the backend's RPC endpoints.
-10. Write tests with mocked engine (backend) or mocked client (gateway).
+8. Add a typed provider client in `gateway/src/gateway_service/providers/` that extends `BaseProvider` and implements the relevant resource protocols from `protocols.py`. Add a `create` classmethod and register it in `KNOWN_PROVIDERS` in `providers/__init__.py`.
+9. Add gateway route(s) that map OpenAI API to the service's RPC endpoints.
+10. Write tests with mocked engine (service) or mocked provider client (gateway).
 11. Write `README.md` with endpoints, config, and build notes.
-12. Update root `README.md` models table.
+12. Update root `README.md` providers table.
 13. Run `ruff check`, `ty check`, and `pytest` before committing.
 
 ## Local development

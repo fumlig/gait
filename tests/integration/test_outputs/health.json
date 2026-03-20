@@ -1,8 +1,0 @@
-{
-  "status": "ok",
-  "backends": {
-    "speech": "healthy",
-    "transcription": "healthy",
-    "chat": "healthy"
-  }
-}

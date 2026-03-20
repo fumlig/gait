@@ -43,3 +43,6 @@ voices/*
 
 # Downloaded RNN noise models for voice cleaning
 scripts/models/
+
+# Integration test outputs
+tests/integration/test_outputs/

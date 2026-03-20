@@ -2,19 +2,18 @@
 
 Local ML models exposed via OpenAI-compatible REST APIs.
 
-A FastAPI gateway unifies all services behind a single port. Each ML model runs as a thin Starlette backend in its own Docker container with GPU passthrough. Orchestrated with `docker compose`.
+A FastAPI gateway unifies all providers behind a single port. Each ML model runs as a thin service in its own Docker container with GPU passthrough. Orchestrated with `docker compose`.
 
-## Models
+## Providers
 
-| Service | Model | Params | Type |
-|---------|-------|--------|------|
-| [llamacpp](services/llamacpp/) | [llama.cpp](https://github.com/ggml-org/llama.cpp) (any GGUF model) | varies | LLM |
-| [chatterbox](services/chatterbox/) | [Chatterbox-Turbo](https://github.com/resemble-ai/chatterbox) | 350M | TTS (English) |
-| [chatterbox](services/chatterbox/) | [Chatterbox](https://github.com/resemble-ai/chatterbox) | 500M | TTS (English) |
-| [chatterbox](services/chatterbox/) | [Chatterbox-Multilingual](https://github.com/resemble-ai/chatterbox) | 500M | TTS (23 languages) |
-| [whisperx](services/whisperx/) | [WhisperX](https://github.com/m-bain/whisperX) (large-v3 default) | 1.5B | STT |
+| Provider | Service | Resources | Endpoints | GPU |
+|----------|---------|-----------|-----------|-----|
+| llamacpp ([services/llamacpp/](services/llamacpp/)) | llamacpp | Chat Completions, Completions, Responses, Embeddings | `/v1/chat/completions`, `/v1/completions`, `/v1/responses`, `/v1/embeddings` | ✓ |
+| chatterbox ([services/chatterbox/](services/chatterbox/)) | chatterbox | Audio Speech | `/v1/audio/speech` | ✓ |
+| whisperx ([services/whisperx/](services/whisperx/)) | whisperx | Audio Transcriptions, Audio Translations | `/v1/audio/transcriptions`, `/v1/audio/translations` | ✓ |
+| voices | gateway (local) | Audio Voices | `/v1/audio/voices` | — |
 
-The default LLM is [Qwen 3.5 9B](https://huggingface.co/unsloth/Qwen3.5-9B-GGUF) (Q8_0, ~9.5 GB), which fits on an RTX 3090 alongside the TTS and STT models. Set `LLAMA_HF_REPO` to use a different model. All three Chatterbox models run in a single container; the default (`chatterbox-turbo`) is preloaded at startup, others load on demand.
+All services also contribute to `GET /v1/models` (merged model list) and `GET /health` (aggregated status).
 
 ## Quick start
 
@@ -49,15 +48,10 @@ curl http://localhost:3000/v1/audio/transcriptions \
 | `GATEWAY_PORT` | `3000` | Host port for the gateway |
 | `HF_TOKEN` | -- | HuggingFace API token |
 | `HF_HOME` | `~/.cache/huggingface` | Audio model weight cache |
-| `LLAMA_HF_REPO` | `unsloth/Qwen3.5-9B-GGUF:Q8_0` | HuggingFace repo for LLM |
-| `LLAMA_MODEL` | -- | Path to a local GGUF file (alternative to `LLAMA_HF_REPO`) |
-| `LLAMA_CTX_SIZE` | `4096` | Context window size |
-| `LLAMA_N_GPU_LAYERS` | `99` | GPU layers to offload |
 | `MODELS_DIR` | `./models` | LLM model cache |
-| `CHATTERBOX_DEFAULT_MODEL` | `chatterbox-turbo` | Chatterbox model to preload |
 | `VOICES_DIR` | `./voices` | Voice reference clips (shared between gateway and chatterbox) |
-| `BACKEND_TIMEOUT` | `300` | Gateway timeout for backend requests (seconds) |
+| `BACKEND_TIMEOUT` | `300` | Gateway timeout for provider requests (seconds) |
 
-Per-service configuration is documented in each service's README.
+Per-service configuration is documented in each service's README: [gateway](gateway/), [llamacpp](services/llamacpp/), [chatterbox](services/chatterbox/), [whisperx](services/whisperx/).
 
 See [AGENTS.md](AGENTS.md) for architecture details and development conventions.
