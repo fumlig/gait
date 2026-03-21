@@ -1,41 +1,28 @@
 from __future__ import annotations
 
-import logging
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
+from gateway_service.deps import TranslationClient, backend_errors
 from gateway_service.formatting import format_transcription
 from gateway_service.models import TranscriptionResponseFormat
 
 if TYPE_CHECKING:
     from starlette.responses import Response
 
-    from gateway_service.providers.protocols import AudioTranslations
-
-logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
-
-def _get_translation_client(request: Request) -> AudioTranslations:
-    client = getattr(request.app.state, "audio_translations", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="No translation backend configured.")
-    return client
 
 
 @router.post("/v1/audio/translations", response_model=None)
 async def create_translation(
-    request: Request,
+    client: TranslationClient,
     file: UploadFile = File(...),
     model: str = Form(...),
     prompt: str | None = Form(None),
     response_format: str = Form("json"),
     temperature: float = Form(0.0),
 ) -> Response:
-    client = _get_translation_client(request)
-
     try:
         fmt = TranscriptionResponseFormat(response_format)
     except ValueError:
@@ -54,7 +41,7 @@ async def create_translation(
     filename = file.filename or "audio.wav"
     want_words = fmt == TranscriptionResponseFormat.verbose_json
 
-    try:
+    async with backend_errors("Translation"):
         result = await client.translate(
             file=audio_data,
             filename=filename,
@@ -63,10 +50,5 @@ async def create_translation(
             temperature=temperature,
             word_timestamps=want_words,
         )
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Translation failed")
-        raise HTTPException(status_code=502, detail="Translation backend unavailable.") from exc
 
     return format_transcription(result, fmt, task="translate")

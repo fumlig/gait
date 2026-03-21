@@ -1,25 +1,11 @@
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING
+from fastapi import APIRouter
 
-from fastapi import APIRouter, HTTPException, Request
-
+from gateway_service.deps import EmbeddingsClient, backend_errors
 from gateway_service.models import EmbeddingRequest, EmbeddingResponse
 
-if TYPE_CHECKING:
-    from gateway_service.providers.protocols import Embeddings
-
-logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
-
-def _get_embeddings_client(request: Request) -> Embeddings:
-    client = getattr(request.app.state, "embeddings", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="No embeddings backend configured.")
-    return client
 
 
 @router.post(
@@ -28,15 +14,8 @@ def _get_embeddings_client(request: Request) -> Embeddings:
     response_model_exclude_unset=True,
 )
 async def embeddings(
-    request: Request,
     body: EmbeddingRequest,
+    client: EmbeddingsClient,
 ) -> EmbeddingResponse:
-    client = _get_embeddings_client(request)
-
-    try:
+    async with backend_errors("Embeddings request"):
         return await client.embeddings(body)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Embeddings request failed")
-        raise HTTPException(status_code=502, detail="Embeddings backend unavailable.") from exc

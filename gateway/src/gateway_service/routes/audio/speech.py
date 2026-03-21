@@ -1,27 +1,13 @@
 from __future__ import annotations
 
-import logging
-from typing import TYPE_CHECKING
-
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
+from gateway_service.deps import SpeechClient, backend_errors
 from gateway_service.models import SpeechRequest, SpeechResponseFormat
 from gateway_service.text_preprocessing import preprocess_speech_text
 
-if TYPE_CHECKING:
-    from gateway_service.providers.protocols import AudioSpeech
-
-logger = logging.getLogger(__name__)
-
 router = APIRouter()
-
-
-def _get_speech_client(request: Request) -> AudioSpeech:
-    client = getattr(request.app.state, "audio_speech", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="No speech backend configured.")
-    return client
 
 
 _FORMAT_CONTENT_TYPES: dict[SpeechResponseFormat, str] = {
@@ -35,18 +21,11 @@ _FORMAT_CONTENT_TYPES: dict[SpeechResponseFormat, str] = {
 
 
 @router.post("/v1/audio/speech")
-async def create_speech(body: SpeechRequest, request: Request) -> Response:
-    client = _get_speech_client(request)
-
+async def create_speech(body: SpeechRequest, client: SpeechClient) -> Response:
     body.input = preprocess_speech_text(body.input)
 
-    try:
+    async with backend_errors("Speech synthesis"):
         wav_bytes, _ = await client.synthesize(body)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Speech synthesis failed")
-        raise HTTPException(status_code=502, detail="Speech backend unavailable.") from exc
 
     audio_bytes, content_type = _convert_audio(wav_bytes, body.response_format)
 

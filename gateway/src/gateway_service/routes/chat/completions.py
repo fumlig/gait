@@ -18,6 +18,7 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
+from gateway_service.deps import ChatClient, backend_errors, require_speech
 from gateway_service.formatting import wav_to_pcm16
 from gateway_service.models import (
     ChatAudioConfig,
@@ -54,20 +55,6 @@ def _extract_sentences(buf: str) -> tuple[str, str]:
         return buf[:_MAX_SENTENCE_BUF].strip(), buf[_MAX_SENTENCE_BUF:]
 
     return "", buf
-
-
-def _get_chat_client(request: Request) -> ChatCompletions:
-    client = getattr(request.app.state, "chat_completions", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="No chat backend configured.")
-    return client
-
-
-def _get_speech_client(request: Request) -> AudioSpeech:
-    client = getattr(request.app.state, "audio_speech", None)
-    if client is None:
-        raise HTTPException(status_code=503, detail="No speech backend configured.")
-    return client
 
 
 def _find_tts_model(request: Request) -> str:
@@ -130,9 +117,8 @@ async def _synth_and_emit(
 async def chat_completions(
     request: Request,
     body: ChatCompletionRequest,
+    client: ChatClient,
 ) -> ChatCompletionResponse | StreamingResponse:
-    client = _get_chat_client(request)
-
     wants_audio = body.modalities is not None and "audio" in body.modalities
 
     if wants_audio:
@@ -143,15 +129,10 @@ async def chat_completions(
             )
         return await _chat_with_audio(request, client, body)
 
-    try:
+    async with backend_errors("Chat completion"):
         if body.stream:
             return await client.chat_completions_stream(body)
         return await client.chat_completions(body)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Chat completion failed")
-        raise HTTPException(status_code=502, detail="Chat backend unavailable.") from exc
 
 
 async def _chat_with_audio(
@@ -160,26 +141,19 @@ async def _chat_with_audio(
     body: ChatCompletionRequest,
 ) -> StreamingResponse:
     """Stream text from the LLM and interleave TTS audio."""
-    speech_client = _get_speech_client(request)
+    speech_client: AudioSpeech = require_speech(request)
 
     audio_cfg = body.audio or ChatAudioConfig()
     voice = audio_cfg.voice
     tts_model = audio_cfg.model or _find_tts_model(request)
 
     # Build LLM request without audio-specific fields
-    from gateway_service.models import ChatCompletionRequest as _Req
-
-    llm_body = _Req.model_validate(
+    llm_body = ChatCompletionRequest.model_validate(
         body.model_dump(exclude_unset=True, exclude={"modalities", "audio"}),
     )
 
-    try:
+    async with backend_errors("Chat completion"):
         llm_resp = await chat_client.chat_completions_stream_raw(llm_body)
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("Chat completion failed (audio path)")
-        raise HTTPException(status_code=502, detail="Chat backend unavailable.") from exc
 
     async def _generate():
         try:
