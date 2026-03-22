@@ -153,6 +153,11 @@ gait/
 - No env prefix -- variables map directly (e.g., `DEVICE=cuda`).
 - Expose all tunables: device, host, port, data dirs, limits.
 
+### Idle timeout (GPU services)
+- `idle.py` provides `IdleMixin` and `idle_checker` — pure infrastructure shared by all GPU services.
+- Each service carries its own copy (no shared library). **All copies must stay identical.**
+- Run `./scripts/check-idle-sync.sh` to verify. If you change one, update all copies.
+
 ### Engine pattern (GPU services only)
 - Module-level singleton instance created at import time.
 - `load()` called during Starlette lifespan startup, `unload()` on shutdown.

@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -22,34 +20,11 @@ from gateway_service.routes.chat import router as chat_router
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
 
-    from gateway_service.models import ModelObject
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
 logger = logging.getLogger(__name__)
-
-
-async def fetch_all_models(application: FastAPI) -> list[ModelObject]:
-    """Fetch models from all HTTP providers, merge, and deduplicate."""
-    providers: list[BaseProvider] = getattr(application.state, "providers", [])
-
-    all_model_lists = await asyncio.gather(
-        *(provider.fetch_models() for provider in providers)
-    )
-
-    seen: set[str] = set()
-    merged: list[ModelObject] = []
-    for model_list in all_model_lists:
-        for model in model_list:
-            if model.id not in seen:
-                seen.add(model.id)
-                merged.append(model)
-
-    application.state.models = merged
-    application.state.models_fetched_at = time.monotonic()
-    return merged
 
 
 @asynccontextmanager
@@ -84,7 +59,7 @@ async def lifespan(application: FastAPI) -> AsyncIterator[None]:
                 setattr(application.state, slot, client)
                 logger.info("  %s → app.state.%s", type(client).__name__, slot)
 
-    merged = await fetch_all_models(application)
+    merged = await models.get_models(application)
     logger.info("Model discovery complete — %d model(s)", len(merged))
 
     provider_summary = ", ".join(f"{p.name}={p.base_url}" for p in providers)
