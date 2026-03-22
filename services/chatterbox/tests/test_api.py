@@ -1,14 +1,19 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
 
 import pytest
 import torch
 from httpx import ASGITransport, AsyncClient
 
-
 SAMPLE_RATE = 24000
 DUMMY_WAV = torch.randn(1, SAMPLE_RATE)  # 1 second of noise
+
+
+@asynccontextmanager
+async def _noop_lifespan(_app):
+    yield
 
 
 @pytest.fixture()
@@ -32,26 +37,11 @@ def mock_engine():
 
 @pytest.fixture()
 def app(mock_engine):
-    """Create a test app that skips the real lifespan (model loading)."""
-    from contextlib import asynccontextmanager
+    """Import the real app with a noop lifespan (skips model loading)."""
+    from chatterbox_service.app import app
 
-    from starlette.applications import Starlette
-    from starlette.routing import Route
-
-    from chatterbox_service.app import health, list_models, synthesize
-
-    @asynccontextmanager
-    async def noop_lifespan(_app):
-        yield
-
-    return Starlette(
-        routes=[
-            Route("/synthesize", synthesize, methods=["POST"]),
-            Route("/models", list_models, methods=["GET"]),
-            Route("/health", health, methods=["GET"]),
-        ],
-        lifespan=noop_lifespan,
-    )
+    app.router.lifespan_context = _noop_lifespan
+    return app
 
 
 @pytest.fixture()

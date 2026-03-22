@@ -8,7 +8,6 @@ from unittest.mock import MagicMock, patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-
 MOCK_SEGMENTS = [
     {
         "start": 0.0,
@@ -62,6 +61,11 @@ def _make_wav_bytes(duration_s: float = 1.0, sample_rate: int = 16000) -> bytes:
     return buf.getvalue()
 
 
+@asynccontextmanager
+async def _noop_lifespan(_app):
+    yield
+
+
 @pytest.fixture()
 def mock_engine():
     """Patch the engine singleton so no real model is loaded."""
@@ -83,25 +87,11 @@ def mock_engine():
 
 @pytest.fixture()
 def app(mock_engine):
-    """Create a test app that skips the real lifespan (model loading)."""
-    from starlette.applications import Starlette
-    from starlette.routing import Route
+    """Import the real app with a noop lifespan (skips model loading)."""
+    from whisperx_service.app import app
 
-    from whisperx_service.app import health, list_models, transcribe, translate
-
-    @asynccontextmanager
-    async def noop_lifespan(_app):
-        yield
-
-    return Starlette(
-        routes=[
-            Route("/transcribe", transcribe, methods=["POST"]),
-            Route("/translate", translate, methods=["POST"]),
-            Route("/models", list_models, methods=["GET"]),
-            Route("/health", health, methods=["GET"]),
-        ],
-        lifespan=noop_lifespan,
-    )
+    app.router.lifespan_context = _noop_lifespan
+    return app
 
 
 @pytest.fixture()
