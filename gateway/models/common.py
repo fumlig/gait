@@ -16,8 +16,8 @@ class ModelObject(BaseModel):
     object: Literal["model"] = "model"
     created: int = 0
     owned_by: str = ""
-    capabilities: list[str] = Field(default_factory=list)
-    loaded: bool = True
+    capabilities: list[str] = Field(default_factory=list)  # gateway extension
+    loaded: bool = True  # gateway extension
 
 
 class ModelListResponse(BaseModel):
@@ -31,6 +31,8 @@ class HealthResponse(BaseModel):
 
 
 class GatewayHealthResponse(BaseModel):
+    """Gateway extension — not part of the OpenAI API."""
+
     status: str = "ok"
     backends: dict[str, str] = Field(default_factory=dict)
 
@@ -38,6 +40,24 @@ class GatewayHealthResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Shared usage / options
 # ---------------------------------------------------------------------------
+
+
+class CompletionTokensDetails(BaseModel):
+    """Breakdown of completion token counts."""
+
+    model_config = ConfigDict(extra="allow")
+
+    reasoning_tokens: int = 0
+    accepted_prediction_tokens: int = 0
+    rejected_prediction_tokens: int = 0
+
+
+class PromptTokensDetails(BaseModel):
+    """Breakdown of prompt token counts."""
+
+    model_config = ConfigDict(extra="allow")
+
+    cached_tokens: int = 0
 
 
 class CompletionUsage(BaseModel):
@@ -48,6 +68,8 @@ class CompletionUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    completion_tokens_details: CompletionTokensDetails | None = None
+    prompt_tokens_details: PromptTokensDetails | None = None
 
 
 class ResponseFormat(BaseModel):

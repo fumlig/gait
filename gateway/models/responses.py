@@ -11,6 +11,15 @@ from pydantic import BaseModel, ConfigDict, Field
 # ---------------------------------------------------------------------------
 
 
+class ReasoningConfig(BaseModel):
+    """Reasoning configuration for the Responses API."""
+
+    model_config = ConfigDict(extra="allow")
+
+    effort: str | None = None  # "low", "medium", "high"
+    summary: str | None = None  # "auto", "concise", "detailed"
+
+
 class CreateResponseRequest(BaseModel):
     """POST /v1/responses request body (OpenAI Responses API)."""
 
@@ -30,6 +39,8 @@ class CreateResponseRequest(BaseModel):
     temperature: float | None = None
     top_p: float | None = None
     max_output_tokens: int | None = None
+    # Reasoning
+    reasoning: ReasoningConfig | None = None
     # Streaming
     stream: bool = False
     # Metadata
@@ -64,6 +75,41 @@ class ResponseOutputMessage(BaseModel):
     status: str | None = None
 
 
+class ReasoningSummaryContent(BaseModel):
+    """A content block in a reasoning summary."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = "summary_text"
+    text: str = ""
+
+
+class ResponseReasoningItem(BaseModel):
+    """A reasoning item in the response output array."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: str = "reasoning"
+    id: str = ""
+    summary: list[ReasoningSummaryContent] = Field(default_factory=list)
+
+
+class OutputTokensDetails(BaseModel):
+    """Breakdown of output token counts for the Responses API."""
+
+    model_config = ConfigDict(extra="allow")
+
+    reasoning_tokens: int = 0
+
+
+class InputTokensDetails(BaseModel):
+    """Breakdown of input token counts for the Responses API."""
+
+    model_config = ConfigDict(extra="allow")
+
+    cached_tokens: int = 0
+
+
 class ResponseUsage(BaseModel):
     """Token usage for the Responses API."""
 
@@ -72,6 +118,8 @@ class ResponseUsage(BaseModel):
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
+    output_tokens_details: OutputTokensDetails | None = None
+    input_tokens_details: InputTokensDetails | None = None
 
 
 class CreateResponseResponse(BaseModel):

@@ -316,10 +316,12 @@
                     <label for="stt-model">STT</label>
                     <select id="stt-model"></select>
 
-                    <label for="thinking-toggle">Thinking</label>
-                    <select id="thinking-toggle">
+                    <label for="reasoning-select">Reasoning</label>
+                    <select id="reasoning-select">
                         <option value="off">Off</option>
-                        <option value="on">On</option>
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
                     </select>
 
                     <textarea
@@ -588,13 +590,16 @@ You are a helpful assistant.</textarea
                 let player = null;
 
                 try {
-                    const thinking = $("#thinking-toggle").value === "on";
+                    const reasoning = $("#reasoning-select").value;
                     const body = {
                         model,
                         messages: msgs,
                         stream: true,
-                        chat_template_kwargs: { enable_thinking: thinking },
                     };
+
+                    if (reasoning !== "off") {
+                        body.reasoning_effort = reasoning;
+                    }
 
                     if (useAudioModality) {
                         body.modalities = ["text", "audio"];

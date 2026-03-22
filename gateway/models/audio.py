@@ -50,7 +50,7 @@ class SpeechRequest(BaseModel):
     response_format: SpeechResponseFormat = SpeechResponseFormat.mp3
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
 
-    # Chatterbox-specific extensions
+    # Chatterbox extensions (not part of OpenAI API)
     language: str | None = None
     exaggeration: float | None = Field(default=None, ge=0.0, le=2.0)
     cfg_weight: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -103,17 +103,23 @@ class VerboseTranscriptionResponse(BaseModel):
 
 
 class RawSegment(BaseModel):
-    """A raw segment from the STT backend, before formatting."""
+    """A raw segment from the STT backend, before formatting.
+
+    Internal gateway type — not part of the OpenAI API.
+    """
 
     start: float
     end: float
     text: str
     words: list[WordTimestamp] = Field(default_factory=list)
-    speaker: str | None = None
+    speaker: str | None = None  # whisperx diarization extension
 
 
 class TranscriptionResult(BaseModel):
-    """Internal result from the STT backend, before response formatting."""
+    """Internal result from the STT backend, before response formatting.
+
+    Internal gateway type — not part of the OpenAI API.
+    """
 
     text: str
     language: str = ""
@@ -122,7 +128,7 @@ class TranscriptionResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Voice management
+# Voice management (gateway extension — not part of the OpenAI API)
 # ---------------------------------------------------------------------------
 
 

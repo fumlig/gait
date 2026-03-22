@@ -27,6 +27,7 @@ Key variables (set in `docker-compose.yml`):
 | `LLAMA_ARG_MODEL` | -- | Path to a local GGUF file |
 | `LLAMA_ARG_CTX_SIZE` | `4096` | Context window size |
 | `LLAMA_ARG_N_GPU_LAYERS` | `99` | GPU layers to offload |
+| `LLAMA_ARG_REASONING_FORMAT` | `deepseek` | How to parse thinking tokens (`deepseek`, `none`) |
 
 ## Model files
 

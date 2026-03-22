@@ -2615,6 +2615,776 @@ async def test_unset_fields_excluded_from_dump(client: AsyncClient, chat_client:
     assert "stream_options" not in dump
     assert "response_format" not in dump
     assert "seed" not in dump
+    assert "reasoning_effort" not in dump
     # But the fields the user sent should be present
     assert "model" in dump
     assert "messages" in dump
+
+
+# ===================================================================
+# Chat Completions — reasoning
+# ===================================================================
+
+MOCK_REASONING_CHAT_COMPLETION = ChatCompletionResponse.model_validate({
+    "id": "chatcmpl-reason-1",
+    "object": "chat.completion",
+    "created": 1700000000,
+    "model": "my-model",
+    "choices": [
+        {
+            "index": 0,
+            "message": {
+                "role": "assistant",
+                "content": "The answer is 42.",
+                "reasoning_content": "Let me think step by step about the meaning of life...",
+            },
+            "finish_reason": "stop",
+        }
+    ],
+    "usage": {
+        "prompt_tokens": 19,
+        "completion_tokens": 256,
+        "total_tokens": 275,
+        "completion_tokens_details": {
+            "reasoning_tokens": 128,
+            "accepted_prediction_tokens": 0,
+            "rejected_prediction_tokens": 0,
+        },
+        "prompt_tokens_details": {
+            "cached_tokens": 0,
+        },
+    },
+})
+
+
+async def test_chat_completions_reasoning_effort(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """reasoning_effort is forwarded to the backend."""
+    chat_client.chat_completions.return_value = MOCK_REASONING_CHAT_COMPLETION
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "What is the meaning of life?"}],
+            "reasoning_effort": "high",
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.chat_completions.call_args[0][0]
+    assert call_args.reasoning_effort == "high"
+
+    # Verify the dump only includes reasoning_effort when explicitly set
+    dump = call_args.model_dump(exclude_unset=True)
+    assert dump["reasoning_effort"] == "high"
+
+
+async def test_chat_completions_reasoning_effort_levels(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """All reasoning effort levels (low, medium, high) are forwarded."""
+    chat_client.chat_completions.return_value = MOCK_REASONING_CHAT_COMPLETION
+
+    for level in ("low", "medium", "high"):
+        resp = await client.post(
+            "/v1/chat/completions",
+            json={
+                "model": "my-model",
+                "messages": [{"role": "user", "content": "Think about this."}],
+                "reasoning_effort": level,
+            },
+        )
+        assert resp.status_code == 200
+        call_args = chat_client.chat_completions.call_args[0][0]
+        assert call_args.reasoning_effort == level
+
+
+async def test_chat_completions_reasoning_usage(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Response includes completion_tokens_details with reasoning_tokens."""
+    chat_client.chat_completions.return_value = MOCK_REASONING_CHAT_COMPLETION
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Think step by step."}],
+            "reasoning_effort": "high",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # Verify usage structure
+    usage = data["usage"]
+    assert usage["prompt_tokens"] == 19
+    assert usage["completion_tokens"] == 256
+    assert usage["total_tokens"] == 275
+
+    # Verify completion_tokens_details
+    details = usage["completion_tokens_details"]
+    assert details["reasoning_tokens"] == 128
+    assert details["accepted_prediction_tokens"] == 0
+    assert details["rejected_prediction_tokens"] == 0
+
+    # Verify prompt_tokens_details
+    prompt_details = usage["prompt_tokens_details"]
+    assert prompt_details["cached_tokens"] == 0
+
+
+async def test_chat_completions_reasoning_content_in_message(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Response message includes reasoning_content when the backend provides it."""
+    chat_client.chat_completions.return_value = MOCK_REASONING_CHAT_COMPLETION
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Think about this."}],
+            "reasoning_effort": "high",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    msg = data["choices"][0]["message"]
+    assert msg["content"] == "The answer is 42."
+    assert msg["reasoning_content"] == "Let me think step by step about the meaning of life..."
+
+
+async def test_chat_completions_reasoning_with_max_completion_tokens(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """max_completion_tokens is forwarded alongside reasoning_effort."""
+    chat_client.chat_completions.return_value = MOCK_REASONING_CHAT_COMPLETION
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Think about this."}],
+            "reasoning_effort": "medium",
+            "max_completion_tokens": 16384,
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.chat_completions.call_args[0][0]
+    assert call_args.reasoning_effort == "medium"
+    assert call_args.max_completion_tokens == 16384
+
+
+async def test_chat_completions_reasoning_not_sent_when_unset(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """reasoning_effort is excluded from the dump when not explicitly set."""
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.chat_completions.call_args[0][0]
+    dump = call_args.model_dump(exclude_unset=True)
+    assert "reasoning_effort" not in dump
+
+
+async def test_chat_completions_reasoning_streaming(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Streaming with reasoning_effort returns SSE chunks with reasoning_content."""
+    from starlette.responses import StreamingResponse
+
+    def _sse(delta: dict, *, finish: str | None = None, usage: dict | None = None) -> bytes:
+        obj = {
+            "id": "chatcmpl-r1",
+            "object": "chat.completion.chunk",
+            "created": 1700000000,
+            "model": "my-model",
+            "choices": [
+                {"index": 0, "delta": delta, "finish_reason": finish},
+            ],
+        }
+        if usage is not None:
+            obj["usage"] = usage
+        return f"data: {json.dumps(obj)}\n\n".encode()
+
+    async def _gen():
+        yield _sse({"role": "assistant"})
+        yield _sse({"reasoning_content": "Let me think"})
+        yield _sse({"reasoning_content": " about this..."})
+        yield _sse({"content": "The answer"})
+        yield _sse({"content": " is 42."})
+        yield _sse({}, finish="stop", usage={
+            "prompt_tokens": 10,
+            "completion_tokens": 100,
+            "total_tokens": 110,
+            "completion_tokens_details": {"reasoning_tokens": 64},
+            "prompt_tokens_details": {"cached_tokens": 0},
+        })
+        yield b"data: [DONE]\n\n"
+
+    chat_client.chat_completions_stream.return_value = StreamingResponse(
+        _gen(), media_type="text/event-stream",
+    )
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Think!"}],
+            "stream": True,
+            "reasoning_effort": "high",
+            "stream_options": {"include_usage": True},
+        },
+    )
+
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    # Verify reasoning_effort was forwarded
+    call_args = chat_client.chat_completions_stream.call_args[0][0]
+    assert call_args.reasoning_effort == "high"
+
+    # Parse SSE events
+    events = []
+    for raw in resp.text.strip().split("\n\n"):
+        for line in raw.split("\n"):
+            if line.startswith("data: ") and line[6:] != "[DONE]":
+                events.append(json.loads(line[6:]))
+
+    # Find reasoning_content deltas
+    reasoning_parts = [
+        e["choices"][0]["delta"]["reasoning_content"]
+        for e in events
+        if e["choices"][0]["delta"].get("reasoning_content")
+    ]
+    assert reasoning_parts == ["Let me think", " about this..."]
+
+    # Find content deltas
+    content_parts = [
+        e["choices"][0]["delta"]["content"]
+        for e in events
+        if e["choices"][0]["delta"].get("content")
+    ]
+    assert content_parts == ["The answer", " is 42."]
+
+    # Find usage in the last event
+    usage_event = [e for e in events if e.get("usage")]
+    assert len(usage_event) == 1
+    assert usage_event[0]["usage"]["completion_tokens_details"]["reasoning_tokens"] == 64
+
+
+async def test_chat_completions_reasoning_usage_without_details(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Normal completions without reasoning return usage without token details."""
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [{"role": "user", "content": "Hello"}],
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    usage = data["usage"]
+    assert usage["prompt_tokens"] == 10
+    assert usage["completion_tokens"] == 8
+    assert usage["total_tokens"] == 18
+    # completion_tokens_details should not be present for non-reasoning models
+    details = usage.get("completion_tokens_details")
+    assert "completion_tokens_details" not in usage or details is None
+
+
+async def test_chat_completions_reasoning_message_in_history(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Assistant messages with reasoning_content in history are forwarded."""
+    chat_client.chat_completions.return_value = MOCK_REASONING_CHAT_COMPLETION
+
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [
+                {"role": "user", "content": "What is 2+2?"},
+                {
+                    "role": "assistant",
+                    "content": "4",
+                    "reasoning_content": "Simple addition: 2+2=4",
+                },
+                {"role": "user", "content": "And 3+3?"},
+            ],
+            "reasoning_effort": "low",
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.chat_completions.call_args[0][0]
+    messages = call_args.messages
+    assert len(messages) == 3
+    assert messages[1].reasoning_content == "Simple addition: 2+2=4"
+
+
+# ===================================================================
+# Responses API — reasoning
+# ===================================================================
+
+MOCK_REASONING_RESPONSE = CreateResponseResponse.model_validate({
+    "id": "resp-reason-1",
+    "object": "response",
+    "created_at": 1700000000,
+    "model": "my-model",
+    "output": [
+        {
+            "type": "reasoning",
+            "id": "rs_001",
+            "summary": [
+                {
+                    "type": "summary_text",
+                    "text": "I considered the mathematical properties of the number.",
+                }
+            ],
+        },
+        {
+            "type": "message",
+            "id": "msg-reason-1",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "The answer is 42."}],
+            "status": "completed",
+        },
+    ],
+    "status": "completed",
+    "usage": {
+        "input_tokens": 27,
+        "output_tokens": 2076,
+        "total_tokens": 2103,
+        "output_tokens_details": {
+            "reasoning_tokens": 1984,
+        },
+        "input_tokens_details": {
+            "cached_tokens": 0,
+        },
+    },
+})
+
+
+async def test_responses_reasoning_effort(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Responses API with reasoning.effort is forwarded to the backend."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "What is the meaning of life?",
+            "reasoning": {"effort": "high"},
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.create_response.call_args[0][0]
+    assert call_args.reasoning is not None
+    assert call_args.reasoning.effort == "high"
+
+
+async def test_responses_reasoning_effort_levels(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """All reasoning effort levels work in the Responses API."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    for level in ("low", "medium", "high"):
+        resp = await client.post(
+            "/v1/responses",
+            json={
+                "model": "my-model",
+                "input": "Think about this.",
+                "reasoning": {"effort": level},
+            },
+        )
+        assert resp.status_code == 200
+        call_args = chat_client.create_response.call_args[0][0]
+        assert call_args.reasoning.effort == level
+
+
+async def test_responses_reasoning_summary(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Responses API with reasoning.summary is forwarded to the backend."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "What is 2+2?",
+            "reasoning": {"effort": "medium", "summary": "auto"},
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.create_response.call_args[0][0]
+    assert call_args.reasoning.effort == "medium"
+    assert call_args.reasoning.summary == "auto"
+
+    # Verify the dump only includes set fields
+    dump = call_args.model_dump(exclude_unset=True)
+    assert dump["reasoning"]["effort"] == "medium"
+    assert dump["reasoning"]["summary"] == "auto"
+
+
+async def test_responses_reasoning_summary_levels(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """All reasoning summary levels work in the Responses API."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    for summary in ("auto", "concise", "detailed"):
+        resp = await client.post(
+            "/v1/responses",
+            json={
+                "model": "my-model",
+                "input": "Think about this.",
+                "reasoning": {"effort": "high", "summary": summary},
+            },
+        )
+        assert resp.status_code == 200
+        call_args = chat_client.create_response.call_args[0][0]
+        assert call_args.reasoning.summary == summary
+
+
+async def test_responses_reasoning_output_items(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Response includes reasoning output item with summary."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "What is the meaning of life?",
+            "reasoning": {"effort": "high", "summary": "auto"},
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # First output item should be reasoning
+    reasoning_item = data["output"][0]
+    assert reasoning_item["type"] == "reasoning"
+    assert reasoning_item["id"] == "rs_001"
+    assert len(reasoning_item["summary"]) == 1
+    assert reasoning_item["summary"][0]["type"] == "summary_text"
+    assert "mathematical" in reasoning_item["summary"][0]["text"]
+
+    # Second output item should be the message
+    message_item = data["output"][1]
+    assert message_item["type"] == "message"
+    assert message_item["content"][0]["text"] == "The answer is 42."
+
+
+async def test_responses_reasoning_usage(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Response usage includes output_tokens_details with reasoning_tokens."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "Think about this.",
+            "reasoning": {"effort": "high"},
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    usage = data["usage"]
+    assert usage["input_tokens"] == 27
+    assert usage["output_tokens"] == 2076
+    assert usage["total_tokens"] == 2103
+
+    # Verify output_tokens_details
+    output_details = usage["output_tokens_details"]
+    assert output_details["reasoning_tokens"] == 1984
+
+    # Verify input_tokens_details
+    input_details = usage["input_tokens_details"]
+    assert input_details["cached_tokens"] == 0
+
+
+async def test_responses_reasoning_not_sent_when_unset(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """reasoning is excluded from the dump when not explicitly set."""
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "Hello",
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.create_response.call_args[0][0]
+    dump = call_args.model_dump(exclude_unset=True)
+    assert "reasoning" not in dump
+
+
+async def test_responses_reasoning_usage_without_details(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Normal responses without reasoning return usage without token details."""
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "Hello",
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    usage = data["usage"]
+    assert usage["input_tokens"] == 10
+    assert usage["output_tokens"] == 8
+    assert usage["total_tokens"] == 18
+    # Token details should not be present for non-reasoning responses
+    assert "output_tokens_details" not in usage or usage.get("output_tokens_details") is None
+
+
+async def test_responses_reasoning_streaming(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Streaming with reasoning returns SSE events including reasoning items."""
+    from starlette.responses import StreamingResponse
+
+    async def _gen():
+        # Reasoning summary event
+        yield (
+            b'event: response.reasoning_summary_part.added\n'
+            b'data: {"type":"response.reasoning_summary_part.added",'
+            b'"item_id":"rs_001","part":{"type":"summary_text","text":""}}\n\n'
+        )
+        yield (
+            b'event: response.reasoning_summary_text.delta\n'
+            b'data: {"type":"response.reasoning_summary_text.delta",'
+            b'"item_id":"rs_001","delta":"Thinking about math..."}\n\n'
+        )
+        yield (
+            b'event: response.reasoning_summary_text.done\n'
+            b'data: {"type":"response.reasoning_summary_text.done",'
+            b'"item_id":"rs_001","text":"Thinking about math..."}\n\n'
+        )
+        # Message content event
+        yield (
+            b'event: response.output_text.delta\n'
+            b'data: {"type":"response.output_text.delta",'
+            b'"item_id":"msg_001","delta":"42"}\n\n'
+        )
+        yield (
+            b'event: response.completed\n'
+            b'data: {"type":"response.completed","response":{'
+            b'"id":"resp-r1","object":"response","model":"my-model",'
+            b'"output":[{"type":"reasoning","id":"rs_001","summary":'
+            b'[{"type":"summary_text","text":"Thinking about math..."}]},'
+            b'{"type":"message","id":"msg_001","role":"assistant",'
+            b'"content":[{"type":"output_text","text":"42"}]}],'
+            b'"status":"completed","usage":{"input_tokens":10,'
+            b'"output_tokens":100,"total_tokens":110,'
+            b'"output_tokens_details":{"reasoning_tokens":64},'
+            b'"input_tokens_details":{"cached_tokens":0}}}}\n\n'
+        )
+
+    chat_client.create_response_stream.return_value = StreamingResponse(
+        _gen(), media_type="text/event-stream",
+    )
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "What is the meaning of life?",
+            "reasoning": {"effort": "high", "summary": "auto"},
+            "stream": True,
+        },
+    )
+
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+
+    # Verify reasoning was forwarded
+    call_args = chat_client.create_response_stream.call_args[0][0]
+    assert call_args.reasoning.effort == "high"
+    assert call_args.reasoning.summary == "auto"
+
+    # Parse events — reasoning summary events should be present
+    text = resp.text
+    assert "reasoning_summary" in text
+    assert "Thinking about math..." in text
+    assert "reasoning_tokens" in text
+
+
+async def test_responses_reasoning_with_tools(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Reasoning and tools can be combined in Responses API."""
+    reasoning_with_tool = CreateResponseResponse.model_validate({
+        "id": "resp-reason-tool-1",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "my-model",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_002",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": "I need to check the weather to answer this.",
+                    }
+                ],
+            },
+            {
+                "type": "function_call",
+                "id": "fc_002",
+                "call_id": "call_xyz",
+                "name": "get_weather",
+                "arguments": '{"location": "San Francisco"}',
+            },
+        ],
+        "status": "completed",
+        "usage": {
+            "input_tokens": 40,
+            "output_tokens": 300,
+            "total_tokens": 340,
+            "output_tokens_details": {"reasoning_tokens": 200},
+            "input_tokens_details": {"cached_tokens": 0},
+        },
+    })
+    chat_client.create_response.return_value = reasoning_with_tool
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "What's the weather in SF?",
+            "reasoning": {"effort": "medium"},
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "get_weather",
+                    "description": "Get weather",
+                    "parameters": {"type": "object", "properties": {}},
+                }
+            ],
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+
+    # First item is reasoning
+    assert data["output"][0]["type"] == "reasoning"
+    assert "weather" in data["output"][0]["summary"][0]["text"]
+
+    # Second item is function_call
+    assert data["output"][1]["type"] == "function_call"
+    assert data["output"][1]["name"] == "get_weather"
+
+    # Usage includes reasoning tokens
+    assert data["usage"]["output_tokens_details"]["reasoning_tokens"] == 200
+
+
+async def test_responses_reasoning_effort_only(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """reasoning with only effort (no summary) is forwarded correctly."""
+    chat_client.create_response.return_value = MOCK_REASONING_RESPONSE
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "Hello",
+            "reasoning": {"effort": "low"},
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.create_response.call_args[0][0]
+    assert call_args.reasoning.effort == "low"
+    assert call_args.reasoning.summary is None
+
+    # Only effort should appear in the dump
+    dump = call_args.model_dump(exclude_unset=True)
+    assert dump["reasoning"]["effort"] == "low"
+
+
+async def test_responses_reasoning_multiple_summaries(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Response can include multiple summary content blocks."""
+    multi_summary = CreateResponseResponse.model_validate({
+        "id": "resp-reason-multi",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "my-model",
+        "output": [
+            {
+                "type": "reasoning",
+                "id": "rs_multi",
+                "summary": [
+                    {"type": "summary_text", "text": "First, I considered the input."},
+                    {"type": "summary_text", "text": "Then, I evaluated options."},
+                ],
+            },
+            {
+                "type": "message",
+                "id": "msg-multi",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Here's my conclusion."}],
+            },
+        ],
+        "status": "completed",
+        "usage": {
+            "input_tokens": 15,
+            "output_tokens": 500,
+            "total_tokens": 515,
+            "output_tokens_details": {"reasoning_tokens": 400},
+        },
+    })
+    chat_client.create_response.return_value = multi_summary
+
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "my-model",
+            "input": "What should I do?",
+            "reasoning": {"effort": "high", "summary": "detailed"},
+        },
+    )
+
+    assert resp.status_code == 200
+    data = resp.json()
+    summaries = data["output"][0]["summary"]
+    assert len(summaries) == 2
+    assert summaries[0]["text"] == "First, I considered the input."
+    assert summaries[1]["text"] == "Then, I evaluated options."

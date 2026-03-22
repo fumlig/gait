@@ -30,9 +30,6 @@ from openai import OpenAI
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://localhost:3000")
 OUTPUT_DIR = Path(__file__).parent / "test_outputs"
 
-# llama.cpp + Qwen3: disable thinking by default to speed up tests.
-NO_THINK = {"chat_template_kwargs": {"enable_thinking": False}}
-
 
 def _save(name: str, data: str | bytes, binary: bool = False) -> Path:
     """Persist test output to OUTPUT_DIR and return the path."""
@@ -627,7 +624,6 @@ class TestChatCompletions:
                 {"role": "user", "content": "Say hello in exactly 5 words."},
             ],
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_completion.json",
@@ -648,7 +644,6 @@ class TestChatCompletions:
             ],
             max_tokens=512,
             stream=True,
-            extra_body=NO_THINK,
         )
         chunks = []
         full_text = ""
@@ -682,7 +677,6 @@ class TestChatCompletions:
                 {"role": "user", "content": "Hello!"},
             ],
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_system_msg.json",
@@ -705,7 +699,6 @@ class TestChatCompletions:
                 {"role": "user", "content": "What is my name?"},
             ],
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_multi_turn.json",
@@ -756,7 +749,6 @@ class TestChatToolCalling:
             tools=[self.WEATHER_TOOL],
             tool_choice="auto",
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_tool_call.json",
@@ -789,7 +781,6 @@ class TestChatToolCalling:
             tools=[self.WEATHER_TOOL],
             tool_choice="auto",
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         msg1 = resp1.choices[0].message
         assert msg1.tool_calls is not None
@@ -813,7 +804,6 @@ class TestChatToolCalling:
             ],
             tools=[self.WEATHER_TOOL],
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_tool_multi_turn.json",
@@ -838,7 +828,6 @@ class TestChatToolCalling:
             tool_choice="auto",
             stream=True,
             max_tokens=512,
-            extra_body=NO_THINK,
         )
         chunks = []
         tool_call_name = ""
@@ -888,7 +877,6 @@ class TestChatResponseFormat:
             ],
             response_format={"type": "json_object"},
             max_tokens=256,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_json_mode.json",
@@ -921,7 +909,6 @@ class TestChatSamplingParams:
             messages=[{"role": "user", "content": "Say hi"}],
             temperature=0.1,
             max_tokens=64,
-            extra_body=NO_THINK,
         )
         assert resp.choices[0].message.content
 
@@ -933,7 +920,6 @@ class TestChatSamplingParams:
             messages=[{"role": "user", "content": "Say hi"}],
             top_p=0.5,
             max_tokens=64,
-            extra_body=NO_THINK,
         )
         assert resp.choices[0].message.content
 
@@ -950,7 +936,6 @@ class TestChatSamplingParams:
             ],
             stop=["5"],
             max_tokens=256,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_stop.json",
@@ -970,7 +955,6 @@ class TestChatSamplingParams:
             seed=12345,
             temperature=0.0,
             max_tokens=64,
-            extra_body=NO_THINK,
         )
         r1 = client.chat.completions.create(**kwargs)
         r2 = client.chat.completions.create(**kwargs)
@@ -998,7 +982,6 @@ class TestChatSamplingParams:
                 },
             ],
             max_tokens=10,
-            extra_body=NO_THINK,
         )
         assert resp.choices[0].finish_reason == "length"
 
@@ -1010,7 +993,6 @@ class TestChatSamplingParams:
             messages=[{"role": "user", "content": "Say something"}],
             frequency_penalty=0.5,
             max_tokens=64,
-            extra_body=NO_THINK,
         )
         assert resp.choices[0].message.content
 
@@ -1022,7 +1004,6 @@ class TestChatSamplingParams:
             messages=[{"role": "user", "content": "Say something"}],
             presence_penalty=0.5,
             max_tokens=64,
-            extra_body=NO_THINK,
         )
         assert resp.choices[0].message.content
 
@@ -1036,7 +1017,6 @@ class TestChatSamplingParams:
             logprobs=True,
             top_logprobs=3,
             max_tokens=32,
-            extra_body=NO_THINK,
         )
         _save(
             "chat_logprobs.json",
@@ -1063,7 +1043,6 @@ class TestCompletions:
             model=models["llm"][0],
             prompt="The capital of France is",
             max_tokens=20,
-            extra_body=NO_THINK,
         )
         _save(
             "completion.json",
@@ -1081,7 +1060,6 @@ class TestCompletions:
             prompt="Once upon a time",
             max_tokens=50,
             stream=True,
-            extra_body=NO_THINK,
         )
         chunks = []
         full_text = ""
@@ -1115,7 +1093,6 @@ class TestResponses:
                 "model": models["llm"][0],
                 "input": "Say hello in one word.",
                 "max_output_tokens": 512,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1141,7 +1118,6 @@ class TestResponses:
                 "input": "Say hello in one word.",
                 "max_output_tokens": 512,
                 "stream": True,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
             headers={"Accept": "text/event-stream"},
         )
@@ -1177,7 +1153,6 @@ class TestResponses:
                 "instructions": "You are a pirate. Always say Arrr!",
                 "input": "Hello!",
                 "max_output_tokens": 512,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1207,7 +1182,6 @@ class TestResponses:
                     },
                 ],
                 "max_output_tokens": 128,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1333,7 +1307,6 @@ class TestChatAudio:
                     "voice": "default",
                     "model": models["tts"][0],
                 },
-                "chat_template_kwargs": {"enable_thinking": False},
             },
             headers={"Accept": "text/event-stream"},
         )
@@ -1416,7 +1389,6 @@ class TestChatAudio:
                     "model": models["tts"][0],
                     "format": "pcm16",
                 },
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1495,7 +1467,6 @@ class TestChatInputAudio:
                     },
                 ],
                 "max_tokens": 256,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1540,7 +1511,6 @@ class TestChatInputAudio:
                     },
                 ],
                 "max_tokens": 256,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1584,7 +1554,6 @@ class TestChatInputAudio:
                     },
                 ],
                 "max_tokens": 256,
-                "chat_template_kwargs": {"enable_thinking": False},
             },
         )
         assert r.status_code == 200
@@ -1630,7 +1599,6 @@ class TestChatInputAudio:
                     "voice": "default",
                     "model": models["tts"][0],
                 },
-                "chat_template_kwargs": {"enable_thinking": False},
             },
             headers={"Accept": "text/event-stream"},
         )
@@ -1741,6 +1709,492 @@ class TestChatInputAudio:
             },
         )
         assert r.status_code == 400
+
+
+# ===================================================================
+# Reasoning  (gateway forwards reasoning_effort, reasoning_content,
+#   and token details through the llama.cpp proxy)
+# ===================================================================
+
+
+
+class TestChatReasoning:
+    """Chat Completions with reasoning support (thinking models)."""
+
+    def test_reasoning_effort_high(
+        self, client: OpenAI, models: dict,
+    ):
+        """reasoning_effort='high' is forwarded and accepted."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        resp = client.chat.completions.create(
+            model=models["llm"][0],
+            messages=[
+                {"role": "user", "content": "What is 7 * 8?"},
+            ],
+            reasoning_effort="high",
+            max_completion_tokens=4096,
+        )
+        _save(
+            "chat_reasoning_high.json",
+            json.dumps(resp.model_dump(), indent=2, default=str),
+        )
+        assert resp.choices[0].message.content is not None
+        assert resp.usage is not None
+        assert resp.usage.total_tokens > 0
+
+    def test_reasoning_effort_low(
+        self, client: OpenAI, models: dict,
+    ):
+        """reasoning_effort='low' is forwarded and accepted."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        resp = client.chat.completions.create(
+            model=models["llm"][0],
+            messages=[
+                {"role": "user", "content": "What is 2 + 2?"},
+            ],
+            reasoning_effort="low",
+            max_completion_tokens=4096,
+        )
+        _save(
+            "chat_reasoning_low.json",
+            json.dumps(resp.model_dump(), indent=2, default=str),
+        )
+        assert resp.choices[0].message.content is not None
+        assert resp.usage is not None
+
+    def test_reasoning_effort_medium(
+        self, client: OpenAI, models: dict,
+    ):
+        """reasoning_effort='medium' is forwarded and accepted."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        resp = client.chat.completions.create(
+            model=models["llm"][0],
+            messages=[
+                {"role": "user", "content": "What is 3 + 5?"},
+            ],
+            reasoning_effort="medium",
+            max_completion_tokens=4096,
+        )
+        _save(
+            "chat_reasoning_medium.json",
+            json.dumps(resp.model_dump(), indent=2, default=str),
+        )
+        assert resp.choices[0].message.content is not None
+
+    def test_reasoning_usage_has_token_details(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Reasoning response includes completion_tokens_details."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {"role": "user", "content": "What is 12 * 13?"},
+                ],
+                "reasoning_effort": "high",
+                "max_completion_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "chat_reasoning_usage.json",
+            json.dumps(data, indent=2, default=str),
+        )
+
+        usage = data["usage"]
+        assert usage["prompt_tokens"] > 0
+        assert usage["completion_tokens"] > 0
+        assert usage["total_tokens"] > 0
+
+        # completion_tokens_details should be present
+        details = usage.get("completion_tokens_details")
+        if details is not None:
+            assert "reasoning_tokens" in details
+            assert details["reasoning_tokens"] >= 0
+
+    def test_reasoning_content_in_response(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """With thinking enabled, the response may include reasoning_content."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "What is the square root of 144?",
+                    },
+                ],
+                "reasoning_effort": "high",
+                "max_completion_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "chat_reasoning_content.json",
+            json.dumps(data, indent=2, default=str),
+        )
+
+        msg = data["choices"][0]["message"]
+        # The model should produce visible content
+        assert msg.get("content") is not None
+
+    def test_reasoning_streaming(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Streaming with reasoning_effort returns reasoning_content deltas."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {"role": "user", "content": "What is 9 * 7?"},
+                ],
+                "reasoning_effort": "high",
+                "max_completion_tokens": 4096,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200
+
+        raw_sse = r.text
+        _save("chat_reasoning_stream.txt", raw_sse)
+
+        reasoning_parts: list[str] = []
+        content_parts: list[str] = []
+        usage_chunk: dict | None = None
+
+        for line in raw_sse.split("\n"):
+            line = line.strip()
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+
+            if data.get("usage"):
+                usage_chunk = data["usage"]
+
+            choices = data.get("choices", [])
+            if not choices:
+                continue
+            delta = choices[0].get("delta", {})
+            if delta.get("reasoning_content"):
+                reasoning_parts.append(delta["reasoning_content"])
+            if delta.get("content"):
+                content_parts.append(delta["content"])
+
+        _save(
+            "chat_reasoning_stream_parsed.json",
+            json.dumps(
+                {
+                    "reasoning_token_count": len(reasoning_parts),
+                    "content_token_count": len(content_parts),
+                    "has_usage": usage_chunk is not None,
+                },
+                indent=2,
+            ),
+        )
+
+        # With thinking enabled, we should see content tokens
+        assert len(content_parts) > 0
+
+        # Usage chunk should be present (include_usage=true)
+        assert usage_chunk is not None
+        assert usage_chunk["total_tokens"] > 0
+
+    def test_reasoning_streaming_usage_details(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Streaming usage chunk includes completion_tokens_details."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {"role": "user", "content": "What is 15 + 27?"},
+                ],
+                "reasoning_effort": "high",
+                "max_completion_tokens": 4096,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            },
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200
+
+        raw_sse = r.text
+        _save("chat_reasoning_stream_usage.txt", raw_sse)
+
+        usage_chunk: dict | None = None
+        for line in raw_sse.split("\n"):
+            line = line.strip()
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            if data.get("usage"):
+                usage_chunk = data["usage"]
+
+        assert usage_chunk is not None
+        _save(
+            "chat_reasoning_stream_usage_parsed.json",
+            json.dumps(usage_chunk, indent=2),
+        )
+
+        assert usage_chunk["prompt_tokens"] > 0
+        assert usage_chunk["completion_tokens"] > 0
+
+        # Check for token details if present
+        details = usage_chunk.get("completion_tokens_details")
+        if details is not None:
+            assert "reasoning_tokens" in details
+
+
+class TestResponsesReasoning:
+    """Responses API with reasoning support."""
+
+    def test_responses_reasoning_effort(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Responses API with reasoning.effort is forwarded and accepted."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "What is 7 * 8?",
+                "reasoning": {"effort": "high"},
+                "max_output_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "response_reasoning_effort.json",
+            json.dumps(data, indent=2, default=str),
+        )
+        assert data["object"] == "response"
+        assert data["status"] == "completed"
+        assert len(data["output"]) > 0
+        assert data["usage"]["total_tokens"] > 0
+
+    def test_responses_reasoning_usage_details(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Responses usage includes output_tokens_details when reasoning."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "What is 12 * 13?",
+                "reasoning": {"effort": "high"},
+                "max_output_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "response_reasoning_usage.json",
+            json.dumps(data, indent=2, default=str),
+        )
+
+        usage = data["usage"]
+        assert usage["input_tokens"] > 0
+        assert usage["output_tokens"] > 0
+        assert usage["total_tokens"] > 0
+
+        # Check output_tokens_details if present
+        details = usage.get("output_tokens_details")
+        if details is not None:
+            assert "reasoning_tokens" in details
+            assert details["reasoning_tokens"] >= 0
+
+    def test_responses_reasoning_summary(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Responses API with reasoning.summary is forwarded and accepted."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "What is the square root of 256?",
+                "reasoning": {"effort": "high", "summary": "auto"},
+                "max_output_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "response_reasoning_summary.json",
+            json.dumps(data, indent=2, default=str),
+        )
+        assert data["status"] == "completed"
+        assert len(data["output"]) > 0
+
+    def test_responses_reasoning_summary_concise(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """reasoning.summary='concise' is forwarded."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "What is 5 factorial?",
+                "reasoning": {"effort": "medium", "summary": "concise"},
+                "max_output_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "response_reasoning_summary_concise.json",
+            json.dumps(data, indent=2, default=str),
+        )
+        assert data["status"] == "completed"
+
+    def test_responses_reasoning_summary_detailed(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """reasoning.summary='detailed' is forwarded."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "What is the derivative of x^2?",
+                "reasoning": {"effort": "high", "summary": "detailed"},
+                "max_output_tokens": 4096,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "response_reasoning_summary_detailed.json",
+            json.dumps(data, indent=2, default=str),
+        )
+        assert data["status"] == "completed"
+
+    def test_responses_reasoning_effort_levels(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """All reasoning effort levels (low, medium, high) are accepted."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        for level in ("low", "medium", "high"):
+            r = raw_client.post(
+                "/v1/responses",
+                json={
+                    "model": models["llm"][0],
+                    "input": f"What is 2 + 3? (effort={level})",
+                    "reasoning": {"effort": level},
+                    "max_output_tokens": 4096,
+                },
+            )
+            assert r.status_code == 200, (
+                f"reasoning.effort={level} returned {r.status_code}"
+            )
+            data = r.json()
+            _save(
+                f"response_reasoning_{level}.json",
+                json.dumps(data, indent=2, default=str),
+            )
+            assert data["status"] == "completed"
+
+    def test_responses_reasoning_streaming(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Streaming Responses with reasoning produces SSE events."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "What is 6 * 9?",
+                "reasoning": {"effort": "high", "summary": "auto"},
+                "max_output_tokens": 4096,
+                "stream": True,
+            },
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200
+
+        raw_sse = r.text
+        _save("response_reasoning_stream.txt", raw_sse)
+
+        events: list[str] = []
+        for line in raw_sse.split("\n"):
+            line = line.strip()
+            if line.startswith("event: "):
+                events.append(line[7:])
+
+        _save(
+            "response_reasoning_stream_events.json",
+            json.dumps(events, indent=2),
+        )
+
+        assert "response.created" in events
+        assert (
+            "response.completed" in events or "response.done" in events
+        )
+
+    def test_responses_reasoning_without_reasoning_param(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """Responses without reasoning param still works (no reasoning)."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+        r = raw_client.post(
+            "/v1/responses",
+            json={
+                "model": models["llm"][0],
+                "input": "Say hello.",
+                "max_output_tokens": 128,
+            },
+        )
+        assert r.status_code == 200
+        data = r.json()
+        _save(
+            "response_no_reasoning.json",
+            json.dumps(data, indent=2, default=str),
+        )
+        assert data["status"] == "completed"
+        assert data["usage"]["total_tokens"] > 0
 
 
 # ===================================================================

@@ -72,6 +72,7 @@ class ChatMessage(BaseModel):
     content: str | list[dict[str, Any]] | None = None
     name: str | None = None
     # assistant messages
+    reasoning_content: str | None = None  # llama.cpp extension — thinking content
     tool_calls: list[ChatCompletionToolCall] | None = None
     refusal: str | None = None
     audio: ChatMessageAudio | None = None
@@ -132,7 +133,9 @@ class ChatCompletionRequest(BaseModel):
     # Response format
     response_format: ResponseFormat | None = None
     seed: int | None = None
-    # Audio modality (gateway extension)
+    # Reasoning (OpenAI reasoning API)
+    reasoning_effort: str | None = None  # "low", "medium", "high"
+    # Audio modality (OpenAI audio output)
     modalities: list[str] | None = None
     audio: ChatAudioConfig | None = None
     # Streaming options
@@ -203,6 +206,7 @@ class ChatCompletionChunkDelta(BaseModel):
 
     role: str | None = None
     content: str | None = None
+    reasoning_content: str | None = None  # llama.cpp extension — thinking content
     tool_calls: list[dict[str, Any]] | None = None
     refusal: str | None = None
 
