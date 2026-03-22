@@ -9,8 +9,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -23,6 +21,7 @@ from starlette.routing import Route
 
 from whisperx_service.config import settings
 from whisperx_service.engine import engine
+from whisperx_service.idle import idle_checker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -136,33 +135,15 @@ async def health(request: Request) -> JSONResponse:
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    idle_task = None
-
-    if settings.model_idle_timeout > 0:
-
-        async def _idle_checker() -> None:
-            while True:
-                await asyncio.sleep(30)
-                if engine.unload_if_idle(settings.model_idle_timeout):
-                    logger.info(
-                        "Model unloaded due to idle timeout (%ds).",
-                        settings.model_idle_timeout,
-                    )
-
-        idle_task = asyncio.create_task(_idle_checker())
-
     if settings.default_model:
         logger.info("Preloading default model: %s", settings.default_model)
         engine.load()
     else:
         logger.info("No default model — models will load lazily on first request.")
 
-    yield
+    async with idle_checker(engine, settings.model_idle_timeout):
+        yield
 
-    if idle_task:
-        idle_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await idle_task
     engine.unload()
 
 

@@ -5,12 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-import time
 from typing import Any
 
 import torch
 
 from whisperx_service.config import settings
+from whisperx_service.idle import IdleMixin
 
 logger = logging.getLogger(__name__)
 
@@ -23,13 +23,12 @@ WHISPER_MODEL_SIZES = frozenset(
 )
 
 
-class WhisperXEngine:
+class WhisperXEngine(IdleMixin):
     def __init__(self) -> None:
         self._model: Any = None
         self._model_name: str | None = None
         self._align_models: dict[str, tuple[Any, Any]] = {}
         self._diarize_pipeline: Any = None
-        self._last_used: float = 0.0
 
     def load(self, model_name: str | None = None) -> None:
         import whisperx
@@ -78,26 +77,6 @@ class WhisperXEngine:
     @property
     def loaded_model_name(self) -> str | None:
         return self._model_name
-
-    def touch(self) -> None:
-        self._last_used = time.monotonic()
-
-    def idle_seconds(self) -> float:
-        if not self.is_loaded or self._last_used == 0.0:
-            return 0.0
-        return time.monotonic() - self._last_used
-
-    def unload_if_idle(self, timeout: float) -> bool:
-        if timeout <= 0 or not self.is_loaded:
-            return False
-        if self.idle_seconds() >= timeout:
-            logger.info(
-                "Idle for %.0fs (timeout=%ds), unloading models.",
-                self.idle_seconds(), timeout,
-            )
-            self.unload()
-            return True
-        return False
 
     def _resolve_model_name(self, name: str) -> str:
         if name == "whisper-1":

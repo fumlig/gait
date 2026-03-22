@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import random
-import time
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
@@ -12,6 +11,7 @@ import torch
 import torchaudio
 
 from chatterbox_service.config import settings
+from chatterbox_service.idle import IdleMixin
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,13 +46,12 @@ def resolve_model_name(name: str) -> str:
     return MODEL_ALIASES.get(name, name)
 
 
-class ChatterboxEngine:
+class ChatterboxEngine(IdleMixin):
     """Manages multiple Chatterbox model variants with lazy loading."""
 
     def __init__(self) -> None:
         self._models: dict[str, Any] = {}
         self._sample_rates: dict[str, int] = {}
-        self._last_used: float = 0.0
 
     def load(self, model_name: str | None = None) -> None:
         model_name = model_name or settings.default_model
@@ -106,26 +105,6 @@ class ChatterboxEngine:
         if resolved not in self._models:
             self.load(resolved)
         return resolved
-
-    def touch(self) -> None:
-        self._last_used = time.monotonic()
-
-    def idle_seconds(self) -> float:
-        if not self.is_loaded or self._last_used == 0.0:
-            return 0.0
-        return time.monotonic() - self._last_used
-
-    def unload_if_idle(self, timeout: float) -> bool:
-        if timeout <= 0 or not self.is_loaded:
-            return False
-        if self.idle_seconds() >= timeout:
-            logger.info(
-                "Idle for %.0fs (timeout=%ds), unloading models.",
-                self.idle_seconds(), timeout,
-            )
-            self.unload()
-            return True
-        return False
 
     @property
     def loaded_models(self) -> dict[str, bool]:

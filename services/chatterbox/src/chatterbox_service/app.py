@@ -8,8 +8,6 @@ Endpoints:
 
 from __future__ import annotations
 
-import asyncio
-import contextlib
 import io
 import json
 import logging
@@ -29,6 +27,7 @@ from chatterbox_service.engine import (
     engine,
     validate_language,
 )
+from chatterbox_service.idle import idle_checker
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -148,33 +147,15 @@ async def health(request: Request) -> JSONResponse:
 
 @asynccontextmanager
 async def lifespan(app: Starlette) -> AsyncIterator[None]:
-    idle_task = None
-
-    if settings.model_idle_timeout > 0:
-
-        async def _idle_checker() -> None:
-            while True:
-                await asyncio.sleep(30)
-                if engine.unload_if_idle(settings.model_idle_timeout):
-                    logger.info(
-                        "Model(s) unloaded due to idle timeout (%ds).",
-                        settings.model_idle_timeout,
-                    )
-
-        idle_task = asyncio.create_task(_idle_checker())
-
     if settings.default_model:
         logger.info("Preloading default model: %s", settings.default_model)
         engine.load(settings.default_model)
     else:
         logger.info("No default model — models will load lazily on first request.")
 
-    yield
+    async with idle_checker(engine, settings.model_idle_timeout):
+        yield
 
-    if idle_task:
-        idle_task.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await idle_task
     engine.unload()
 
 
