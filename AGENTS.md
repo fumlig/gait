@@ -38,51 +38,56 @@ Gait exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway 
 
 ```
 gait/
+  pyproject.toml              # root project (gateway + script deps)
+  uv.lock                    # lockfile
+  .python-version            # Python 3.12 (gateway)
+  Dockerfile                 # gateway Docker image
   docker-compose.yml          # orchestrates all services
   .env                        # (optional) host-level env vars
   AGENTS.md                   # this file
-  gateway/                    # FastAPI OpenAI-compatible gateway
-    src/gateway_service/
-      main.py                # FastAPI app + lifespan
-      config.py              # pydantic-settings
-      models.py              # shared response schemas
-      formatting.py          # response format conversion
-      providers/
-        protocols.py         # Resource protocols (ChatCompletions, AudioSpeech, etc.)
-        base.py              # BaseProvider base class (health, models, create)
-        __init__.py          # KNOWN_PROVIDERS registry, Registerable protocol
-        llamacpp.py          # LlamacppClient — transparent proxy for llama.cpp
-        chatterbox.py        # ChatterboxClient — TTS via chatterbox
-        whisperx.py          # WhisperxClient — STT via whisperx
-        voice.py             # VoiceClient — local filesystem voice management
-      routes/
-        health.py            # GET /health
-        models.py            # GET /v1/models
-        completions.py       # POST /v1/completions
-        responses.py         # POST /v1/responses
-        embeddings.py        # POST /v1/embeddings
-        chat/
-          completions.py     # POST /v1/chat/completions
-        audio/
-          speech.py          # POST /v1/audio/speech
-          transcriptions.py  # POST /v1/audio/transcriptions
-          translations.py    # POST /v1/audio/translations
-          voices.py          # voice management (local filesystem)
-    tests/
-      test_api.py            # pytest + httpx, mocked clients
+  gateway/                    # FastAPI OpenAI-compatible gateway (Python package)
+    main.py                  # FastAPI app + lifespan
+    config.py                # pydantic-settings
+    models.py                # shared response schemas
+    formatting.py            # response format conversion
+    providers/
+      protocols.py           # Resource protocols (ChatCompletions, AudioSpeech, etc.)
+      base.py                # BaseProvider base class (health, models, create)
+      __init__.py            # KNOWN_PROVIDERS registry, Registerable protocol
+      llamacpp.py            # LlamacppClient — transparent proxy for llama.cpp
+      chatterbox.py          # ChatterboxClient — TTS via chatterbox
+      whisperx.py            # WhisperxClient — STT via whisperx
+      voice.py               # VoiceClient — local filesystem voice management
+    routes/
+      health.py              # GET /health
+      models.py              # GET /v1/models
+      completions.py         # POST /v1/completions
+      responses.py           # POST /v1/responses
+      embeddings.py          # POST /v1/embeddings
+      chat/
+        completions.py       # POST /v1/chat/completions
+      audio/
+        speech.py            # POST /v1/audio/speech
+        transcriptions.py    # POST /v1/audio/transcriptions
+        translations.py      # POST /v1/audio/translations
+        voices.py            # voice management (local filesystem)
+  tests/
+    test_api.py              # pytest + httpx, mocked clients
+  scripts/
+    clean-voice              # voice sample preprocessing
   services/
     llamacpp/                  # LLM service (upstream llama.cpp image)
       Dockerfile               # thin wrapper around ghcr.io/ggml-org/llama.cpp
       README.md                # service docs
     chatterbox/                # TTS service (Starlette)
-      src/chatterbox_service/
+      chatterbox_service/      # Python package (_service suffix avoids shadowing chatterbox-tts)
         app.py                 # Starlette app (RPC endpoints)
         config.py              # pydantic-settings
         engine.py              # model loading + inference singleton
       tests/
         test_api.py            # pytest + httpx, mocked engine
     whisperx/                  # STT service (Starlette)
-      src/whisperx_service/
+      whisperx_service/        # Python package (_service suffix avoids shadowing whisperx lib)
         app.py                 # Starlette app (RPC endpoints)
         config.py              # pydantic-settings
         engine.py              # model loading + inference singleton
@@ -93,9 +98,10 @@ gait/
 
 ## Conventions
 
-### Services
-- The gateway lives at `gateway/` (top level). Optional backend services live under `services/`.
-- Each service is an independent Python project with its own `pyproject.toml`.
+### Project layout
+- The root `pyproject.toml` is the gateway project. Gateway source lives in `gateway/`, tests in `tests/`.
+- The root project also defines optional dependency groups for repo scripts (e.g. `scripts` extra for `clean-voice` deps).
+- Backend services live under `services/` as independent Python projects with their own `pyproject.toml`, `.python-version`, and `.venv/`.
 - No shared library -- each service defines its own types.
 - Use `uv` for dependency management, `ruff` for linting, `ty` for type checking, `pytest` for testing.
 - Every service gets its own `README.md` with endpoint docs, config table, and build notes.
@@ -212,7 +218,7 @@ Some ML packages pull in large unnecessary dependencies. Consider excluding them
 5. Expose RPC endpoints + `/models` + `/health`.
 6. Write `Dockerfile` with configurable ARGs/ENVs.
 7. Add service to `docker-compose.yml` with configurable port, volumes, env vars.
-8. Add a typed provider client in `gateway/src/gateway_service/providers/` that extends `BaseProvider` and implements the relevant resource protocols from `protocols.py`. Add a `create` classmethod and register it in `KNOWN_PROVIDERS` in `providers/__init__.py`.
+8. Add a typed provider client in `gateway/providers/` that extends `BaseProvider` and implements the relevant resource protocols from `protocols.py`. Add a `create` classmethod and register it in `KNOWN_PROVIDERS` in `providers/__init__.py`.
 9. Add gateway route(s) that map OpenAI API to the service's RPC endpoints.
 10. Write tests with mocked engine (service) or mocked provider client (gateway).
 11. Write `README.md` with endpoints, config, and build notes.
@@ -224,19 +230,33 @@ Some ML packages pull in large unnecessary dependencies. Consider excluding them
 Each service is an independent `uv` project (no workspace). Services can be developed and tested locally without Docker.
 
 ### Python versions
-- Each service has a `.python-version` file that pins its required Python version.
+- Each project has a `.python-version` file that pins its required Python version.
 - `uv` reads this file automatically and downloads the correct interpreter if needed.
-- Current pins: chatterbox=3.11, whisperx=3.11, gateway=3.12.
+- Current pins: root/gateway=3.12, chatterbox=3.11, whisperx=3.11.
 - GPU services use Python 3.11 because ML libraries often depend on `distutils` (removed in 3.12) or pin `numpy<1.26`.
 
 ### Setup
-From any service directory:
+From the repo root (gateway):
+```bash
+uv sync --all-extras   # creates .venv with Python 3.12, installs all deps + dev tools
+uv run ruff check src/ # lint
+uvx ty check           # type check (uses .venv for third-party stubs)
+uv run pytest          # tests (providers are mocked, no backend services needed)
+```
+From any service directory (e.g. `services/chatterbox/`):
 ```bash
 uv sync --all-extras   # creates .venv with the pinned Python, installs all deps + dev tools
 uv run ruff check src/ # lint
-uvx ty check           # type check (uses .venv for third-party stubs)
+uvx ty check           # type check
 uv run pytest          # tests (engines are mocked, no GPU needed)
 ```
+
+### Script dependencies
+Script dependencies (e.g. `deepfilternet` for `scripts/clean-voice`) are declared as optional extras in the root `pyproject.toml`:
+```bash
+uv sync --extra scripts   # install script dependencies into the root .venv
+```
+Scripts use `uv run` to pick up these dependencies automatically.
 
 ### IDE configuration
 Each service has its own `.venv/`. Point your IDE's Python interpreter to the service you're working on:

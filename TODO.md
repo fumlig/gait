@@ -2,19 +2,11 @@
 
 ## misc
 
-- Separate provider protocols (only some providers need health checks and model listing)
-- Make auto-downloading and mounting of model weights more robust, add progress indication (should probably be possible to disable and track progress)
-- Add image models and image support to chat
-- Compare to vllm-omni (https://github.com/vllm-project/vllm-omni)
-- Make sure chat, embeddings, completions, responses etc. have explicit models and protocols. Make sure tool calling functionality and all else works in integration tests (consider the OpenAI API docs https://developers.openai.com/api/docs and python client https://developers.openai.com/api/reference/python)
-- Simplify voice cleaning script
-- Preprocess text before voice (remove markdown etc)
-- Use features to pick clients to use (can we make them mutuall exclusive)?
-
-## refactor
-
-- [x] 1. Eliminate `_get_*_client` / try-except boilerplate in routes via FastAPI `Depends()`
-- [x] 2. Split `models.py` (612 lines) into domain modules
-- [x] 3. Lift proxy transport helpers (`_forward`, `_forward_stream`, `_stream_raw`) from `LlamacppClient` into `BaseProvider`
-- [x] 4. Extract shared engine idle-timeout logic into a base class (services)
-- [x] 5. Service tests: import the real app instead of rebuilding it
+- separate provider protocols (only some providers need health checks and model listing)
+- improve movel auto-downloading, listing and monitoring of progress
+- add image models and image support to chat
+- compare to vllm-omni (https://github.com/vllm-project/vllm-omni)
+- improve voice cleaning script
+- improve text preprocessing before voice
+- upgrade gateway to python 3.14
+- fix models dir env var for llamacpp (does it make sense to have?)

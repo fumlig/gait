@@ -1,11 +1,23 @@
 #!/usr/bin/env bash
 # clean-voice — prepare an audio file as a TTS voice reference sample.
 #
-# Uses the arnndn RNN-based speech denoiser (leavened-quisling model,
-# trained for voice signal + general noise) to remove background noise
-# while preserving speech, then normalises loudness.
+# Pipeline:
+#   1. DeepFilterNet — neural speech enhancement that preserves speech
+#                      while suppressing music, sound effects, ambient
+#                      noise, and other non-speech audio.
+#   2. highpass      — cuts sub-vocal rumble below 80 Hz
+#   3. arnndn        — RNN denoiser cleans residual noise
+#   4. dynaudnorm    — loudness normalisation
 #
-# The RNN model is downloaded automatically on first run.
+# Designed for movie clips and other recordings where speech is mixed
+# with non-trivial background audio. Unlike source-separation tools
+# (which can misclassify voices as non-vocal), DeepFilterNet is a
+# speech enhancement model that recognises speech characteristics
+# directly, so it works across voice types.
+#
+# Prerequisites: ffmpeg, curl
+# Python dependencies: uv sync --extra scripts
+# The arnndn model is downloaded automatically on first run.
 #
 # Usage:
 #   clean-voice INPUT OUTPUT
@@ -27,6 +39,17 @@ if [[ ! -f "$INPUT" ]]; then
     exit 1
 fi
 
+# Resolve deepFilter — prefer the project venv (uv run), fall back to PATH
+if uv run deepFilter --help &>/dev/null 2>&1; then
+    DEEP_FILTER="uv run deepFilter"
+elif command -v deepFilter &>/dev/null; then
+    DEEP_FILTER="deepFilter"
+else
+    echo "Error: deepFilter is not installed." >&2
+    echo "Install script dependencies with: uv sync --extra scripts" >&2
+    exit 1
+fi
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 MODELS_DIR="$SCRIPT_DIR/models"
 MODEL="$MODELS_DIR/lq.rnnn"
@@ -41,8 +64,28 @@ fi
 
 mkdir -p "$(dirname "$OUTPUT")"
 
-FILTER_CHAIN="aformat=sample_fmts=fltp:sample_rates=24000:channel_layouts=mono,arnndn=m=${MODEL},dynaudnorm=p=0.95:s=5"
+WORK_DIR=$(mktemp -d)
+trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "Cleaning voice sample: $INPUT -> $OUTPUT"
-ffmpeg -y -i "$INPUT" -af "$FILTER_CHAIN" -c:a pcm_s16le "$OUTPUT"
+# Step 1: Speech enhancement — suppress non-speech audio
+#   --pf: post-filter that over-attenuates very noisy sections
+echo "Enhancing speech: $INPUT"
+$DEEP_FILTER "$INPUT" -o "$WORK_DIR" --no-suffix --pf --log-level info
+ENHANCED="$WORK_DIR/$(basename "$INPUT")"
+
+# Step 2: Denoise and normalise
+#   highpass   — cut rumble below speech range
+#   arnndn     — clean residual noise the enhancer missed
+#   dynaudnorm — normalise loudness
+FILTER_CHAIN="aformat=sample_fmts=fltp:sample_rates=24000:channel_layouts=mono,highpass=f=80,arnndn=m=${MODEL},dynaudnorm=p=0.95:s=5"
+
+echo "Denoising and normalising -> $OUTPUT"
+ffmpeg -y -i "$ENHANCED" -af "$FILTER_CHAIN" -c:a pcm_s16le "$OUTPUT"
+
+# Warn if the output is suspiciously short (likely no speech detected)
+DURATION=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$OUTPUT" 2>/dev/null || echo 0)
+if (( $(echo "$DURATION < 1.0" | bc -l) )); then
+    echo "Warning: output is ${DURATION}s — the input may not contain speech." >&2
+fi
+
 echo "Done: $OUTPUT"

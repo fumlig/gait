@@ -34,7 +34,7 @@ COPY services/whisperx/pyproject.toml services/whisperx/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --no-install-project --frozen
 
-COPY services/whisperx/src/ src/
+COPY services/whisperx/whisperx_service/ whisperx_service/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --frozen
 

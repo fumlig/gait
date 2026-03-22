@@ -1,0 +1,113 @@
+"""Pydantic schemas for gateway requests and responses.
+
+Organised into domain modules; re-exported here so existing
+``from gateway.models import X`` imports continue to work.
+"""
+
+from gateway.models.audio import (
+    RawSegment,
+    Segment,
+    SpeechRequest,
+    SpeechResponseFormat,
+    TimestampGranularity,
+    TranscriptionResponse,
+    TranscriptionResponseFormat,
+    TranscriptionResult,
+    VerboseTranscriptionResponse,
+    Voice,
+    VoiceListResponse,
+    WordTimestamp,
+)
+from gateway.models.chat import (
+    ChatAudioConfig,
+    ChatCompletionChoice,
+    ChatCompletionChunk,
+    ChatCompletionChunkChoice,
+    ChatCompletionChunkDelta,
+    ChatCompletionRequest,
+    ChatCompletionResponse,
+    ChatCompletionTokenLogprob,
+    ChatCompletionTool,
+    ChatCompletionToolCall,
+    ChatMessage,
+    ChoiceLogprobs,
+    FunctionCall,
+    FunctionDefinition,
+    TopLogprob,
+)
+from gateway.models.common import (
+    CompletionUsage,
+    GatewayHealthResponse,
+    HealthResponse,
+    ModelListResponse,
+    ModelObject,
+    ResponseFormat,
+    StreamOptions,
+)
+from gateway.models.completions import (
+    CompletionChoice,
+    CompletionRequest,
+    CompletionResponse,
+)
+from gateway.models.embeddings import (
+    EmbeddingObject,
+    EmbeddingRequest,
+    EmbeddingResponse,
+    EmbeddingUsage,
+)
+from gateway.models.responses import (
+    CreateResponseRequest,
+    CreateResponseResponse,
+    ResponseOutputContent,
+    ResponseOutputMessage,
+    ResponseUsage,
+)
+
+__all__ = [
+    "ChatAudioConfig",
+    "ChatCompletionChoice",
+    "ChatCompletionChunk",
+    "ChatCompletionChunkChoice",
+    "ChatCompletionChunkDelta",
+    "ChatCompletionRequest",
+    "ChatCompletionResponse",
+    "ChatCompletionTokenLogprob",
+    "ChatCompletionTool",
+    "ChatCompletionToolCall",
+    "ChatMessage",
+    "ChoiceLogprobs",
+    "CompletionChoice",
+    "CompletionRequest",
+    "CompletionResponse",
+    "CompletionUsage",
+    "CreateResponseRequest",
+    "CreateResponseResponse",
+    "EmbeddingObject",
+    "EmbeddingRequest",
+    "EmbeddingResponse",
+    "EmbeddingUsage",
+    "FunctionCall",
+    "FunctionDefinition",
+    "GatewayHealthResponse",
+    "HealthResponse",
+    "ModelListResponse",
+    "ModelObject",
+    "RawSegment",
+    "ResponseFormat",
+    "ResponseOutputContent",
+    "ResponseOutputMessage",
+    "ResponseUsage",
+    "Segment",
+    "SpeechRequest",
+    "SpeechResponseFormat",
+    "StreamOptions",
+    "TimestampGranularity",
+    "TopLogprob",
+    "TranscriptionResponse",
+    "TranscriptionResponseFormat",
+    "TranscriptionResult",
+    "VerboseTranscriptionResponse",
+    "Voice",
+    "VoiceListResponse",
+    "WordTimestamp",
+]

@@ -1,27 +1,29 @@
 [project]
-name = "chatterbox-service"
-version = "0.2.0"
-description = "Chatterbox TTS backend service (Starlette RPC)"
-requires-python = ">=3.11"
+name = "gait"
+version = "0.1.0"
+description = "Local ML models via OpenAI-compatible REST APIs"
+requires-python = ">=3.12"
 dependencies = [
-    "starlette>=0.45",
+    "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "pydantic-settings>=2.7",
-    "chatterbox-tts>=0.1.6",
-    # pin onnx to avoid ml-dtypes incompatibility (onnx>=1.17 needs
-    # ml-dtypes>=0.5 which conflicts with chatterbox's numpy<1.26 pin)
-    "onnx<1.17",
-    # perth (audio watermarking, dep of chatterbox) uses pkg_resources
-    # which was removed in setuptools>=81
-    "setuptools<81",
+    "httpx>=0.28",
+    "python-multipart>=0.0.18",
+    "pydub>=0.25",
 ]
 
 [project.optional-dependencies]
 dev = [
     "ruff>=0.11",
     "pytest>=8",
-    "httpx>=0.28",
     "pytest-asyncio>=0.25",
+    "pytest-httpx>=0.35",
+    "openai>=1.60",
+]
+scripts = [
+    "deepfilternet>=0.5",
+    "torch>=2,<2.6",
+    "torchaudio>=2,<2.6",
 ]
 
 [build-system]
@@ -29,10 +31,10 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["chatterbox_service"]
+packages = ["gateway"]
 
 [tool.ruff]
-target-version = "py311"
+target-version = "py312"
 line-length = 99
 src = ["."]
 
@@ -49,9 +51,12 @@ select = [
     "TCH",  # flake8-type-checking
     "RUF",  # ruff-specific rules
 ]
+ignore = [
+    "B008",  # function calls in defaults (FastAPI's File/Form/Depends pattern)
+]
 
 [tool.ruff.lint.isort]
-known-first-party = ["chatterbox_service"]
+known-first-party = ["gateway"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

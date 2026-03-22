@@ -30,7 +30,7 @@ COPY services/chatterbox/pyproject.toml services/chatterbox/uv.lock ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --no-install-project --frozen
 
-COPY services/chatterbox/src/ src/
+COPY services/chatterbox/chatterbox_service/ chatterbox_service/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-dev --frozen
 
