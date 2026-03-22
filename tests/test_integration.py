@@ -1395,21 +1395,349 @@ class TestChatAudio:
         assert len(audio_data_chunks) > 0
         assert len(audio_transcripts) > 0
 
-    def test_chat_audio_requires_stream(
+    def test_chat_audio_nonstreaming(
         self, models: dict, raw_client: httpx.Client,
     ):
-        """Audio modality without stream=true returns 400."""
-        if not models["llm"]:
-            pytest.skip("No LLM model available")
+        """Non-streaming audio modality returns message.audio."""
+        if not models["llm"] or not models["tts"]:
+            pytest.skip("Need both LLM and TTS models")
+
         r = raw_client.post(
             "/v1/chat/completions",
             json={
                 "model": models["llm"][0],
                 "messages": [
-                    {"role": "user", "content": "Hi"},
+                    {"role": "user", "content": "Say hello in one sentence."},
                 ],
+                "max_tokens": 512,
                 "modalities": ["text", "audio"],
-                "audio": {"voice": "default"},
+                "audio": {
+                    "voice": "default",
+                    "model": models["tts"][0],
+                    "format": "pcm16",
+                },
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+        assert r.status_code == 200
+
+        data = r.json()
+        _save("chat_audio_nonstreaming.json", json.dumps(data, indent=2))
+
+        msg = data["choices"][0]["message"]
+        # Content is null per OpenAI contract when audio is returned
+        assert msg.get("content") is None
+        # Audio attachment present with all required fields
+        audio = msg["audio"]
+        assert "id" in audio
+        assert len(audio["id"]) > 0
+        assert "data" in audio
+        assert len(audio["data"]) > 0
+        assert "transcript" in audio
+        assert len(audio["transcript"]) > 0
+        assert "expires_at" in audio
+        assert audio["expires_at"] > 0
+
+        # Verify the audio data is valid base64
+        import base64
+        pcm_bytes = base64.b64decode(audio["data"])
+        assert len(pcm_bytes) > 0
+
+
+# ===================================================================
+# Chat Input Audio  (gateway transcribes input_audio → text before LLM)
+# ===================================================================
+
+
+class TestChatInputAudio:
+    @pytest.fixture(scope="class")
+    def tts_audio_wav(self, client: OpenAI, models: dict) -> bytes:
+        """Generate real speech via TTS for input_audio tests."""
+        if not models["tts"]:
+            pytest.skip("No TTS model available")
+        tts_model = models["tts"][0]
+        resp = client.audio.speech.create(
+            model=tts_model,
+            voice="default",
+            input="What is two plus two?",
+            response_format="wav",
+        )
+        audio = resp.read()
+        _save("tts_for_input_audio.wav", audio, binary=True)
+        return audio
+
+    def test_input_audio_wav(
+        self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
+    ):
+        """input_audio with wav format is transcribed and answered by the LLM."""
+        if not models["llm"] or not models["stt"]:
+            pytest.skip("Need LLM and STT models")
+
+        import base64
+        b64_audio = base64.b64encode(tts_audio_wav).decode()
+
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": b64_audio,
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "max_tokens": 256,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+        assert r.status_code == 200
+
+        data = r.json()
+        _save("chat_input_audio_wav.json", json.dumps(data, indent=2))
+
+        text = data["choices"][0]["message"]["content"] or ""
+        assert len(text) > 0, "LLM produced empty response from transcribed audio"
+
+    def test_input_audio_pcm16(
+        self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
+    ):
+        """input_audio with pcm16 format is converted to WAV then transcribed."""
+        if not models["llm"] or not models["stt"]:
+            pytest.skip("Need LLM and STT models")
+
+        import base64
+
+        from gateway.formatting import wav_to_pcm16
+
+        # Convert our WAV test audio to raw PCM16
+        pcm_bytes, _sr = wav_to_pcm16(tts_audio_wav, target_sr=16000)
+        b64_audio = base64.b64encode(pcm_bytes).decode()
+
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": b64_audio,
+                                    "format": "pcm16",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "max_tokens": 256,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+        assert r.status_code == 200
+
+        data = r.json()
+        _save("chat_input_audio_pcm16.json", json.dumps(data, indent=2))
+
+        text = data["choices"][0]["message"]["content"] or ""
+        assert len(text) > 0, "LLM produced empty response from PCM16 audio"
+
+    def test_input_audio_mixed_content(
+        self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
+    ):
+        """Text parts alongside input_audio are preserved."""
+        if not models["llm"] or not models["stt"]:
+            pytest.skip("Need LLM and STT models")
+
+        import base64
+        b64_audio = base64.b64encode(tts_audio_wav).decode()
+
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "text",
+                                "text": "The user asked this audio question. Answer it:",
+                            },
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": b64_audio,
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "max_tokens": 256,
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+        )
+        assert r.status_code == 200
+
+        data = r.json()
+        _save("chat_input_audio_mixed.json", json.dumps(data, indent=2))
+
+        text = data["choices"][0]["message"]["content"] or ""
+        assert len(text) > 0
+
+    def test_input_audio_with_audio_output(
+        self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
+    ):
+        """input_audio preprocessing + audio output modality work together."""
+        if not models["llm"] or not models["tts"] or not models["stt"]:
+            pytest.skip("Need LLM, TTS, and STT models")
+
+        import base64
+        b64_audio = base64.b64encode(tts_audio_wav).decode()
+
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": b64_audio,
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    },
+                ],
+                "max_tokens": 256,
+                "stream": True,
+                "modalities": ["text", "audio"],
+                "audio": {
+                    "voice": "default",
+                    "model": models["tts"][0],
+                },
+                "chat_template_kwargs": {"enable_thinking": False},
+            },
+            headers={"Accept": "text/event-stream"},
+        )
+        assert r.status_code == 200
+
+        raw_sse = r.text
+        _save("chat_input_audio_with_output.txt", raw_sse)
+
+        text_tokens: list[str] = []
+        audio_data_chunks: list[str] = []
+        got_audio_id = False
+
+        for line in raw_sse.split("\n"):
+            line = line.strip()
+            if not line.startswith("data: "):
+                continue
+            payload = line[6:]
+            if payload == "[DONE]":
+                continue
+            try:
+                data = json.loads(payload)
+            except json.JSONDecodeError:
+                continue
+            delta = data.get("choices", [{}])[0].get("delta", {})
+            if delta.get("content"):
+                text_tokens.append(delta["content"])
+            if delta.get("reasoning_content"):
+                text_tokens.append(delta["reasoning_content"])
+            if "audio" in delta:
+                a = delta["audio"]
+                if "id" in a:
+                    got_audio_id = True
+                if "data" in a:
+                    audio_data_chunks.append(a["data"])
+
+        _save(
+            "chat_input_audio_output_parsed.json",
+            json.dumps(
+                {
+                    "text_token_count": len(text_tokens),
+                    "audio_chunk_count": len(audio_data_chunks),
+                    "got_audio_id": got_audio_id,
+                },
+                indent=2,
+            ),
+        )
+
+        # LLM produced text from the transcribed input audio
+        assert len(text_tokens) > 0
+        # Audio output was also synthesised
+        assert got_audio_id
+        assert len(audio_data_chunks) > 0
+
+    def test_input_audio_empty_data(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """input_audio with empty data returns 400."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": "",
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    },
+                ],
+            },
+        )
+        assert r.status_code == 400
+
+    def test_input_audio_invalid_base64(
+        self, models: dict, raw_client: httpx.Client,
+    ):
+        """input_audio with invalid base64 returns 400."""
+        if not models["llm"]:
+            pytest.skip("No LLM model available")
+
+        r = raw_client.post(
+            "/v1/chat/completions",
+            json={
+                "model": models["llm"][0],
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "input_audio",
+                                "input_audio": {
+                                    "data": "!!!not-base64!!!",
+                                    "format": "wav",
+                                },
+                            },
+                        ],
+                    },
+                ],
             },
         )
         assert r.status_code == 400

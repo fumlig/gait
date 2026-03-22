@@ -10,3 +10,7 @@
 - improve text preprocessing before voice
 - upgrade gateway to python 3.14
 - fix models dir env var for llamacpp (does it make sense to have?)
+- remove models and voices directories from git?
+- disable thinking through api
+- add audio uploading to chat example
+- add metadata to responses like audio sample rate

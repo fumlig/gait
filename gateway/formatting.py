@@ -1,5 +1,5 @@
 """STT response formatting (json, text, srt, vtt, verbose_json) and
-TTS audio conversion (WAV → MP3).
+TTS/STT audio conversion (WAV ↔ PCM16, WAV → MP3).
 """
 
 from __future__ import annotations
@@ -126,6 +126,29 @@ def _format_timestamp_vtt(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
+
+
+def pcm16_to_wav(
+    pcm_bytes: bytes,
+    sample_rate: int = 24000,
+    channels: int = 1,
+    sample_width: int = 2,
+) -> bytes:
+    """Wrap raw PCM16 samples in a WAV container.
+
+    Inverse of :func:`wav_to_pcm16`.  Used to convert ``input_audio``
+    content parts (format ``pcm16``) into WAV before sending to the
+    STT backend.
+    """
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as wf:
+        wf.setnchannels(channels)
+        wf.setsampwidth(sample_width)
+        wf.setframerate(sample_rate)
+        wf.writeframes(pcm_bytes)
+    return buf.getvalue()
 
 
 def wav_to_pcm16(wav_bytes: bytes, target_sr: int = 24000) -> tuple[bytes, int]:

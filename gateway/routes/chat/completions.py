@@ -1,8 +1,11 @@
 """POST /v1/chat/completions — proxied to llama.cpp server.
 
-When the request includes modalities: ["text", "audio"] the gateway streams
-text from the LLM and interleaves synthesised PCM16 audio from the speech
-backend, matching the OpenAI streaming audio contract.
+When the request includes ``input_audio`` content parts the gateway runs
+STT to obtain text before forwarding to the LLM.
+
+When the request includes ``modalities: ["text", "audio"]`` the gateway
+synthesises speech from the LLM's text output, matching the OpenAI audio
+contract for both streaming and non-streaming responses.
 """
 
 from __future__ import annotations
@@ -18,18 +21,25 @@ from uuid import uuid4
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import StreamingResponse
 
-from gateway.deps import ChatClient, backend_errors, require_speech
-from gateway.formatting import wav_to_pcm16
+from gateway.deps import (
+    ChatClient,
+    backend_errors,
+    require_speech,
+    require_transcription,
+)
+from gateway.formatting import pcm16_to_wav, wav_to_pcm16
 from gateway.models import (
     ChatAudioConfig,
     ChatCompletionRequest,
     ChatCompletionResponse,
+    ChatMessage,
+    ChatMessageAudio,
     SpeechRequest,
     SpeechResponseFormat,
 )
 
 if TYPE_CHECKING:
-    from gateway.providers.protocols import AudioSpeech, ChatCompletions
+    from gateway.providers.protocols import AudioSpeech, AudioTranscriptions, ChatCompletions
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +49,11 @@ router = APIRouter()
 _BOUNDARY = re.compile(r"[.!?]\s|\n")
 _MAX_SENTENCE_BUF = 500
 _AUDIO_CHUNK_BYTES = 8192  # ~170 ms at 24 kHz mono PCM16
+
+
+# ---------------------------------------------------------------------------
+# Helpers — sentence extraction
+# ---------------------------------------------------------------------------
 
 
 def _extract_sentences(buf: str) -> tuple[str, str]:
@@ -57,6 +72,11 @@ def _extract_sentences(buf: str) -> tuple[str, str]:
     return "", buf
 
 
+# ---------------------------------------------------------------------------
+# Helpers — model auto-detection
+# ---------------------------------------------------------------------------
+
+
 def _find_tts_model(request: Request) -> str:
     """Auto-detect a TTS model from the cached model list."""
     models = getattr(request.app.state, "models", [])
@@ -68,6 +88,106 @@ def _find_tts_model(request: Request) -> str:
         status_code=400,
         detail="No TTS model available for audio output. Specify 'audio.model' in the request.",
     )
+
+
+def _find_stt_model(request: Request) -> str:
+    """Auto-detect an STT model from the cached model list."""
+    models = getattr(request.app.state, "models", [])
+    for model in models:
+        caps = getattr(model, "capabilities", []) or []
+        mid = model.id.lower()
+        if "transcription" in caps or "whisper" in mid or "stt" in mid:
+            return model.id
+    raise HTTPException(
+        status_code=400,
+        detail="No STT model available to transcribe input audio.",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Helpers — input_audio preprocessing
+# ---------------------------------------------------------------------------
+
+
+def _has_input_audio(messages: list[ChatMessage]) -> bool:
+    """Return True if any message contains an ``input_audio`` content part."""
+    for msg in messages:
+        if not isinstance(msg.content, list):
+            continue
+        for part in msg.content:
+            if isinstance(part, dict) and part.get("type") == "input_audio":
+                return True
+    return False
+
+
+async def _preprocess_input_audio(
+    messages: list[ChatMessage],
+    transcription_client: AudioTranscriptions,
+    stt_model: str,
+) -> list[ChatMessage]:
+    """Replace ``input_audio`` content parts with transcribed text.
+
+    Returns a new list — the originals are not mutated.
+    """
+    result: list[ChatMessage] = []
+    for msg in messages:
+        if not isinstance(msg.content, list):
+            result.append(msg)
+            continue
+
+        new_parts: list[dict] = []
+        changed = False
+        for part in msg.content:
+            if not isinstance(part, dict) or part.get("type") != "input_audio":
+                new_parts.append(part)
+                continue
+
+            changed = True
+            audio_info = part.get("input_audio") or {}
+            b64_data: str = audio_info.get("data", "")
+            fmt: str = audio_info.get("format", "wav")
+
+            if not b64_data:
+                raise HTTPException(
+                    status_code=400,
+                    detail="input_audio content part has empty 'data' field.",
+                )
+
+            try:
+                raw_bytes = base64.b64decode(b64_data)
+            except Exception as exc:
+                raise HTTPException(
+                    status_code=400,
+                    detail="input_audio 'data' is not valid base64.",
+                ) from exc
+
+            # Convert raw PCM16 → WAV so the STT backend can process it.
+            wav_bytes = pcm16_to_wav(raw_bytes) if fmt == "pcm16" else raw_bytes
+
+            async with backend_errors("Input audio transcription"):
+                tr = await transcription_client.transcribe(
+                    file=wav_bytes,
+                    filename="input_audio.wav",
+                    model=stt_model,
+                    language=None,
+                    prompt=None,
+                    temperature=0.0,
+                    word_timestamps=False,
+                )
+
+            new_parts.append({"type": "text", "text": tr.text})
+
+        if changed:
+            result.append(msg.model_copy(update={"content": new_parts}))
+        else:
+            result.append(msg)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Helpers — audio SSE formatting
+# ---------------------------------------------------------------------------
 
 
 def _audio_sse(template: dict, **audio_fields: object) -> str:
@@ -109,6 +229,11 @@ async def _synth_and_emit(
         logger.exception("Audio synthesis failed for chunk: %s", text[:80])
 
 
+# ---------------------------------------------------------------------------
+# Route
+# ---------------------------------------------------------------------------
+
+
 @router.post(
     "/v1/chat/completions",
     response_model=ChatCompletionResponse,
@@ -119,15 +244,25 @@ async def chat_completions(
     body: ChatCompletionRequest,
     client: ChatClient,
 ) -> ChatCompletionResponse | StreamingResponse:
+    # --- input_audio preprocessing -------------------------------------------
+    if _has_input_audio(body.messages):
+        stt_client: AudioTranscriptions = require_transcription(request)
+        stt_model = _find_stt_model(request)
+        body = body.model_copy(
+            update={
+                "messages": await _preprocess_input_audio(
+                    body.messages, stt_client, stt_model,
+                ),
+            },
+        )
+
+    # --- dispatch ------------------------------------------------------------
     wants_audio = body.modalities is not None and "audio" in body.modalities
 
     if wants_audio:
-        if not body.stream:
-            raise HTTPException(
-                status_code=400,
-                detail="Audio modality currently requires stream=true.",
-            )
-        return await _chat_with_audio(request, client, body)
+        if body.stream:
+            return await _chat_with_audio_streaming(request, client, body)
+        return await _chat_with_audio_nonstreaming(request, client, body)
 
     async with backend_errors("Chat completion"):
         if body.stream:
@@ -135,7 +270,75 @@ async def chat_completions(
         return await client.chat_completions(body)
 
 
-async def _chat_with_audio(
+# ---------------------------------------------------------------------------
+# Audio output — non-streaming
+# ---------------------------------------------------------------------------
+
+
+async def _chat_with_audio_nonstreaming(
+    request: Request,
+    chat_client: ChatCompletions,
+    body: ChatCompletionRequest,
+) -> ChatCompletionResponse:
+    """Get full LLM response, synthesise speech, return message.audio."""
+    speech_client: AudioSpeech = require_speech(request)
+
+    audio_cfg = body.audio or ChatAudioConfig()
+    voice = audio_cfg.voice
+    tts_model = audio_cfg.model or _find_tts_model(request)
+
+    # Build LLM request without audio-specific fields
+    llm_body = ChatCompletionRequest.model_validate(
+        body.model_dump(exclude_unset=True, exclude={"modalities", "audio"}),
+    )
+
+    async with backend_errors("Chat completion"):
+        resp = await chat_client.chat_completions(llm_body)
+
+    # Extract assistant text
+    raw_content = resp.choices[0].message.content if resp.choices else None
+    text = raw_content if isinstance(raw_content, str) else ""
+
+    # Synthesise audio from the full text
+    audio_id = uuid4().hex[:16]
+    try:
+        req = SpeechRequest(
+            model=tts_model, input=text, voice=voice,
+            response_format=SpeechResponseFormat.wav,
+        )
+        wav_bytes, _ = await speech_client.synthesize(req)
+        pcm_data, _sr = wav_to_pcm16(wav_bytes)
+        b64_audio = base64.b64encode(pcm_data).decode()
+    except Exception as exc:
+        logger.exception("Audio synthesis failed for non-streaming response")
+        raise HTTPException(
+            status_code=502,
+            detail="Audio synthesis failed.",
+        ) from exc
+
+    # Build the audio attachment and clear content per OpenAI contract
+    audio_obj = ChatMessageAudio(
+        id=audio_id,
+        data=b64_audio,
+        transcript=text,
+        expires_at=int(time.time()) + 3600,
+    )
+    if resp.choices:
+        msg = resp.choices[0].message.model_copy(
+            update={"content": None, "audio": audio_obj},
+        )
+        choice = resp.choices[0].model_copy(update={"message": msg})
+        resp = resp.model_copy(update={"choices": [choice]})
+
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# Audio output — streaming
+# ---------------------------------------------------------------------------
+
+
+async def _chat_with_audio_streaming(
     request: Request,
     chat_client: ChatCompletions,
     body: ChatCompletionRequest,

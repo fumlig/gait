@@ -74,8 +74,20 @@ class ChatMessage(BaseModel):
     # assistant messages
     tool_calls: list[ChatCompletionToolCall] | None = None
     refusal: str | None = None
+    audio: ChatMessageAudio | None = None
     # tool messages
     tool_call_id: str | None = None
+
+
+class ChatMessageAudio(BaseModel):
+    """Audio attachment on an assistant message (non-streaming response)."""
+
+    model_config = ConfigDict(extra="allow")
+
+    id: str
+    data: str  # base64-encoded audio
+    transcript: str
+    expires_at: int
 
 
 class ChatAudioConfig(BaseModel):
