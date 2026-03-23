@@ -43,6 +43,8 @@ class CompletionRequest(BaseModel):
     suffix: str | None = None
     temperature: float | None = None
     top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
     user: str | None = None
     stream_options: StreamOptions | None = None
 

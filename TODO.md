@@ -18,3 +18,12 @@
 - should probably simplify - don't fake native voice models in chat, instead users should just use the voice provider manually while streaming
 - if we really want to manually make it work we should do it as a new chat provider that merges the clients
 - consider openresponses
+- make sure we can configure models fully from the client side and possible remove serverside config of this stuff
+- ```export LLAMA_CACHE="unsloth/Qwen3.5-35B-A3B-GGUF"
+./llama.cpp/llama-cli \
+    -hf unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL \
+    --ctx-size 16384 \
+    --temp 1.0 \
+    --top-p 0.95 \
+    --top-k 20 \
+    --min-p 0.00```

@@ -52,6 +52,16 @@ known-first-party = ["whisperx_service"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 
+# torchcodec (transitive dep of pyannote-audio >=4) must match the torch
+# major version.  whisperx pins torch~=2.8.0, so we need torchcodec 0.6.x
+# or 0.7.x (the two releases built for torch 2.8).  Without this cap uv
+# resolves to the latest torchcodec which targets a newer torch ABI.
+# See https://github.com/pytorch/torchcodec#installing-torchcodec
+[tool.uv]
+override-dependencies = [
+    "torchcodec>=0.6.0,<0.8.0",
+]
+
 # WhisperX requires PyTorch with CUDA -- use uv index overrides for the
 # correct wheel index.
 [tool.uv.sources]

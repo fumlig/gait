@@ -115,6 +115,8 @@ class ChatCompletionRequest(BaseModel):
     messages: list[ChatMessage]
     temperature: float | None = None
     top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
     n: int | None = None
     stream: bool = False
     stop: str | list[str] | None = None

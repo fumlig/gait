@@ -2070,6 +2070,31 @@ async def test_responses_sampling_params(
     assert call_args.max_output_tokens == 500
 
 
+async def test_responses_sampling_params_extended(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Extended sampling parameters (top_k, min_p) are forwarded."""
+    resp = await client.post(
+        "/v1/responses",
+        json={
+            "model": "unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL",
+            "input": "Hello",
+            "temperature": 0.6,
+            "top_p": 0.95,
+            "top_k": 20,
+            "min_p": 0.0,
+        },
+    )
+
+    assert resp.status_code == 200
+    call_args = chat_client.create_response.call_args[0][0]
+    assert call_args.model == "unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL"
+    assert call_args.temperature == 0.6
+    assert call_args.top_p == 0.95
+    assert call_args.top_k == 20
+    assert call_args.min_p == 0.0
+
+
 async def test_responses_missing_model(client: AsyncClient):
     """Gateway returns 422 when 'model' is missing from responses."""
     resp = await client.post(

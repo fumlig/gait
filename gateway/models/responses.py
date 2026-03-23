@@ -38,6 +38,8 @@ class CreateResponseRequest(BaseModel):
     # Sampling
     temperature: float | None = None
     top_p: float | None = None
+    top_k: int | None = None
+    min_p: float | None = None
     max_output_tokens: int | None = None
     # Reasoning
     reasoning: ReasoningConfig | None = None
