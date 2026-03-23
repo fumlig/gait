@@ -12,5 +12,9 @@
 - fix models dir env var for llamacpp (does it make sense to have?)
 - remove models and voices directories from git?
 - disable thinking through api
-- add audio uploading to chat example
 - add metadata to responses like audio sample rate
+- move preprocessing to the provider level, so that it can be customized per provider
+- need better thinking handling/per model logic for llama.cpp, how do we apply             extra_body={"chat_template_kwargs": {"enable_thinking": False}}? Maybe a model config on the client? Best approach might be model configs that are part of the provider
+- should probably simplify - don't fake native voice models in chat, instead users should just use the voice provider manually while streaming
+- if we really want to manually make it work we should do it as a new chat provider that merges the clients
+- consider openresponses

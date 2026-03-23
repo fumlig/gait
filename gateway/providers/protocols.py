@@ -10,7 +10,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
-    import httpx
     from starlette.responses import StreamingResponse
 
     from gateway.models import (
@@ -37,10 +36,6 @@ class ChatCompletions(Protocol):
     async def chat_completions_stream(
         self, body: ChatCompletionRequest,
     ) -> StreamingResponse: ...
-
-    async def chat_completions_stream_raw(
-        self, body: ChatCompletionRequest,
-    ) -> httpx.Response: ...
 
 
 @runtime_checkable
