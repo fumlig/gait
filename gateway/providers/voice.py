@@ -6,6 +6,7 @@ The voices directory is shared with chatterbox via a Docker volume.
 from __future__ import annotations
 
 import logging
+import os
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -25,6 +26,9 @@ logger = logging.getLogger(__name__)
 _NAME_RE = re.compile(r"^[a-zA-Z0-9_-]+$")
 _DEFAULT_VOICE = "default"
 
+_DIR_ENV = "VOICES_DIR"
+_DEFAULT_DIR = "/app/voices"
+
 
 class VoiceClient(AudioVoices):
     """Manages voice reference clips on a local directory.
@@ -34,14 +38,14 @@ class VoiceClient(AudioVoices):
     """
 
     name = "voices"
-    env_var = "VOICES_DIR"
 
     def __init__(self, voices_dir: str | Path) -> None:
         self._voices_dir = Path(voices_dir)
 
     @classmethod
-    def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Self:
-        return cls(voices_dir=env_value)
+    def create(cls, http_client: httpx.AsyncClient) -> Self:
+        voices_dir = os.environ.get(_DIR_ENV, _DEFAULT_DIR)
+        return cls(voices_dir=voices_dir)
 
     def _list_voice_names(self) -> list[str]:
         d = self._voices_dir

@@ -1,8 +1,9 @@
 """Provider client registry.
 
-Each provider class declares an env_var and a create classmethod. At startup
-the gateway checks os.environ for each class's env var and calls create to
-instantiate only those whose variable is set.
+The gateway reads the PROVIDERS setting (a comma-separated list of
+provider names) and instantiates only the matching classes from
+KNOWN_PROVIDERS.  Each provider's create() classmethod reads its own
+env vars for configuration (URLs, paths, etc.).
 """
 
 from __future__ import annotations
@@ -30,15 +31,14 @@ __all__ = [
 @runtime_checkable
 class Registerable(Protocol):
     name: str
-    env_var: str
 
     @classmethod
-    def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Registerable: ...
+    def create(cls, http_client: httpx.AsyncClient) -> Registerable: ...
 
 
-KNOWN_PROVIDERS: list[type[Registerable]] = [
-    LlamacppClient,
-    ChatterboxClient,
-    WhisperxClient,
-    VoiceClient,
-]
+KNOWN_PROVIDERS: dict[str, type[Registerable]] = {
+    "llamacpp": LlamacppClient,
+    "chatterbox": ChatterboxClient,
+    "whisperx": WhisperxClient,
+    "voices": VoiceClient,
+}

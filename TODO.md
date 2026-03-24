@@ -28,3 +28,5 @@
     --top-p 0.95 \
     --top-k 20 \
     --min-p 0.00```
+- try https://github.com/resemble-ai/resemble-enhance for voice prep
+-

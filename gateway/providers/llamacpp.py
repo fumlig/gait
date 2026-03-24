@@ -39,7 +39,8 @@ if TYPE_CHECKING:
 
 class LlamacppClient(BaseProvider, ChatCompletions, Completions, Responses, Embeddings):
     name = "llamacpp"
-    env_var = "LLAMACPP_URL"
+    url_env = "LLAMACPP_URL"
+    default_url = "http://llamacpp:8000"
     default_model_capabilities: ClassVar[list[str]] = ["chat", "completions", "embeddings"]
     models_path = "/v1/models"
 

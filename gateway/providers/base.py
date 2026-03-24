@@ -1,12 +1,15 @@
 """Base class for HTTP provider clients.
 
 Provides model discovery, health checking, and a create classmethod
-for uniform instantiation from environment variables.
+for uniform instantiation.  Each subclass declares *url_env* (the
+environment variable that holds the backend URL) and *default_url*
+(the fallback when the variable is not set).
 """
 
 from __future__ import annotations
 
 import logging
+import os
 from typing import TYPE_CHECKING, ClassVar
 
 from gateway.models import ModelObject
@@ -22,11 +25,13 @@ logger = logging.getLogger(__name__)
 class BaseProvider:
     """Shared implementation for HTTP-based provider clients.
 
-    Subclasses set name, env_var, and default_model_capabilities.
+    Subclasses set name, url_env, default_url, and
+    default_model_capabilities.
     """
 
     name: str
-    env_var: str
+    url_env: ClassVar[str]
+    default_url: ClassVar[str]
     default_model_capabilities: ClassVar[list[str]]
     models_path: str = "/models"
 
@@ -35,8 +40,9 @@ class BaseProvider:
         self._http_client = http_client
 
     @classmethod
-    def create(cls, env_value: str, http_client: httpx.AsyncClient) -> Self:
-        return cls(base_url=env_value, http_client=http_client)
+    def create(cls, http_client: httpx.AsyncClient) -> Self:
+        url = os.environ.get(cls.url_env, cls.default_url)
+        return cls(base_url=url, http_client=http_client)
 
     @property
     def base_url(self) -> str:

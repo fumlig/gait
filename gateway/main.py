@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
 
@@ -29,26 +28,28 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(application: FastAPI) -> AsyncIterator[None]:
-    """Discover providers from env vars, create clients, fetch models."""
+    """Instantiate providers listed in settings.providers, fetch models."""
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(settings.backend_timeout, connect=10.0),
         follow_redirects=False,
     )
     application.state._http_client = http_client
 
-    # Instantiate providers whose env var is set
+    # Instantiate providers listed in the PROVIDERS setting
+    provider_names = [p.strip() for p in settings.providers.split(",") if p.strip()]
     all_clients: list[object] = []
     providers: list[BaseProvider] = []
 
-    for cls in KNOWN_PROVIDERS:
-        value = os.environ.get(cls.env_var)
-        if not value:
+    for name in provider_names:
+        cls = KNOWN_PROVIDERS.get(name)
+        if cls is None:
+            logger.warning("Unknown provider '%s' in PROVIDERS — skipping", name)
             continue
-        client = cls.create(value, http_client)
+        client = cls.create(http_client)
         all_clients.append(client)
         if isinstance(client, BaseProvider):
             providers.append(client)
-        logger.info("Registered provider: %s → %s", cls.name, value)
+        logger.info("Registered provider: %s", cls.name)
 
     application.state.providers = providers
 

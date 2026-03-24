@@ -10,10 +10,11 @@ services:
     volumes:
       - ${VOICES_DIR:-./voices}:/app/voices
     environment:
-      - CHATTERBOX_URL=http://chatterbox:8000
-      - WHISPERX_URL=http://whisperx:8000
+      - PROVIDERS=${PROVIDERS:-llamacpp,chatterbox,whisperx,voices}
       - LLAMACPP_URL=${LLAMACPP_URL:-http://llamacpp:8000}
-      - VOICES_DIR=/app/voices
+      - CHATTERBOX_URL=${CHATTERBOX_URL:-http://chatterbox:8000}
+      - WHISPERX_URL=${WHISPERX_URL:-http://whisperx:8000}
+      - VOICES_DIR=${VOICES_DIR:-/app/voices}
       - BACKEND_TIMEOUT=${BACKEND_TIMEOUT:-300}
     depends_on:
       chatterbox:

@@ -19,7 +19,8 @@ logger = logging.getLogger(__name__)
 
 class ChatterboxClient(BaseProvider, AudioSpeech):
     name = "chatterbox"
-    env_var = "CHATTERBOX_URL"
+    url_env = "CHATTERBOX_URL"
+    default_url = "http://chatterbox:8000"
     default_model_capabilities: ClassVar[list[str]] = ["speech"]
 
     def _build_payload(self, request: SpeechRequest) -> dict:

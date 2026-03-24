@@ -20,7 +20,8 @@ logger = logging.getLogger(__name__)
 
 class WhisperxClient(BaseProvider, AudioTranscriptions, AudioTranslations):
     name = "whisperx"
-    env_var = "WHISPERX_URL"
+    url_env = "WHISPERX_URL"
+    default_url = "http://whisperx:8000"
     default_model_capabilities: ClassVar[list[str]] = ["transcription"]
 
     async def transcribe(

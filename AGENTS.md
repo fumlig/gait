@@ -32,7 +32,7 @@ Gait exposes local ML models via OpenAI-compatible REST APIs. A FastAPI gateway 
 - **Gateway** owns the OpenAI API contract: request/response schemas, format conversion (WAV→MP3, segments→SRT/VTT), model list caching. Also handles voice management directly on a local directory (shared volume with chatterbox).
 - **llamacpp** runs the upstream llama.cpp server image directly. Already OpenAI-compatible — the gateway proxies requests transparently. No custom application code.
 - **Services** (chatterbox, whisperx) are thin Starlette apps that expose raw RPC endpoints. They return raw formats (WAV audio, JSON segments). No FastAPI, no gait-common.
-- **Provider clients** live in the gateway's `providers/` module. Each provider client extends `BaseProvider` (for HTTP providers) and implements resource protocols from `protocols.py`. The gateway auto-discovers which clients to instantiate based on environment variables (`LLAMACPP_URL`, `CHATTERBOX_URL`, `WHISPERX_URL`, `VOICES_DIR`).
+- **Provider clients** live in the gateway's `providers/` module. Each provider client extends `BaseProvider` (for HTTP providers) and implements resource protocols from `protocols.py`. The `PROVIDERS` env var (comma-separated list of names) controls which providers are instantiated at startup. Each provider's `create()` classmethod reads its own env vars (with sensible defaults) for configuration.
 
 ## Repository structure
 
@@ -116,7 +116,7 @@ gait/
 - FastAPI app. Owns all OpenAI API contract concerns.
 - `providers/` module contains typed provider client classes, one per provider type. `protocols.py` defines resource protocols (one per OpenAI endpoint group).
 - HTTP providers extend `BaseProvider` (shared health/models) and implement resource protocols (e.g. `AudioSpeech`, `ChatCompletions`). The `VoiceClient` implements `AudioVoices` directly.
-- Each class declares `env_var` and a `create` classmethod. At startup the gateway iterates `KNOWN_PROVIDERS`, checks `os.environ` for each class's env var, and calls `create` to instantiate only those whose variable is set.
+- `KNOWN_PROVIDERS` is a `dict[str, type]` mapping provider names to classes. At startup the gateway reads the `PROVIDERS` setting (comma-separated names), looks up each in the dict, and calls `cls.create(http_client)`. Each provider's `create()` reads its own env vars (with defaults) for configuration — no values are passed in from outside.
 - Protocol wiring is automatic: the gateway uses `isinstance` checks against each resource protocol to determine which `app.state` slot a client fills. No explicit capabilities list needed.
 - Route modules mirror OpenAI API resource grouping: `chat/`, `completions`, `responses`, `embeddings`, `audio/`.
 - Models are fetched from each provider's `fetch_models()` at startup and cached on `app.state.models`.
@@ -218,7 +218,7 @@ Some ML packages pull in large unnecessary dependencies. Consider excluding them
 5. Expose RPC endpoints + `/models` + `/health`.
 6. Write `Dockerfile` with configurable ARGs/ENVs.
 7. Add service to `docker-compose.yml` with configurable port, volumes, env vars.
-8. Add a typed provider client in `gateway/providers/` that extends `BaseProvider` and implements the relevant resource protocols from `protocols.py`. Add a `create` classmethod and register it in `KNOWN_PROVIDERS` in `providers/__init__.py`.
+8. Add a typed provider client in `gateway/providers/` that extends `BaseProvider` and implements the relevant resource protocols from `protocols.py`. The `create` classmethod should read its own env vars (with defaults). Register the class in `KNOWN_PROVIDERS` dict in `providers/__init__.py`.
 9. Add gateway route(s) that map OpenAI API to the service's RPC endpoints.
 10. Write tests with mocked engine (service) or mocked provider client (gateway).
 11. Write `README.md` with endpoints, config, and build notes.
