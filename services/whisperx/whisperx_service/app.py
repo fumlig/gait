@@ -1,14 +1,16 @@
 """WhisperX STT service (Starlette).
 
 Endpoints:
-    POST /transcribe  - multipart (file + params) -> JSON segments
-    POST /translate   - multipart (file + params) -> JSON segments
-    GET  /models      - available models with loaded status
-    GET  /health      - liveness / readiness
+    POST /transcribe         - multipart (file + params) -> JSON segments
+    POST /transcribe_stream  - multipart (file + params) -> SSE segments
+    POST /translate          - multipart (file + params) -> JSON segments
+    GET  /models             - available models with loaded status
+    GET  /health             - liveness / readiness
 """
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -16,7 +18,7 @@ from typing import TYPE_CHECKING
 
 from starlette.applications import Starlette
 from starlette.requests import Request  # noqa: TC002 — Starlette handler signature
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from whisperx_service.config import settings
@@ -103,6 +105,62 @@ async def transcribe(request: Request) -> JSONResponse:
     return await _do_transcribe(request, task="transcribe")
 
 
+async def transcribe_stream(request: Request) -> StreamingResponse | JSONResponse:
+    """POST /transcribe_stream — yield segments as SSE while the model runs."""
+    form = await request.form()
+
+    upload = form.get("file")
+    model = str(form.get("model", ""))
+
+    if not model:
+        return JSONResponse({"detail": "'model' is required."}, status_code=400)
+
+    try:
+        engine.ensure_model(model)
+    except Exception as exc:
+        logger.exception("Failed to load model '%s'", model)
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+
+    if not engine.is_loaded:
+        return JSONResponse({"detail": "Model is not loaded yet."}, status_code=503)
+
+    from starlette.datastructures import UploadFile
+
+    if not isinstance(upload, UploadFile):
+        return JSONResponse({"detail": "No audio file uploaded."}, status_code=400)
+
+    audio_data = await upload.read()
+    if not audio_data:
+        return JSONResponse({"detail": "Empty audio file."}, status_code=400)
+
+    if len(audio_data) > settings.max_file_size:
+        return JSONResponse(
+            {"detail": f"File too large. Maximum size is {settings.max_file_size} bytes."},
+            status_code=400,
+        )
+
+    language = str(form.get("language", "")) or None
+    prompt = str(form.get("prompt", "")) or None
+    temperature = float(str(form.get("temperature", "0.0")))
+
+    def generate():
+        """Sync generator — Starlette runs each next() in a thread."""
+        for item in engine.transcribe_stream(
+            audio_data,
+            language=language,
+            prompt=prompt,
+            temperature=temperature,
+            task="transcribe",
+        ):
+            yield f"data: {json.dumps(item)}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
 async def translate(request: Request) -> JSONResponse:
     return await _do_transcribe(request, task="translate")
 
@@ -150,6 +208,7 @@ async def lifespan(app: Starlette) -> AsyncIterator[None]:
 app = Starlette(
     routes=[
         Route("/transcribe", transcribe, methods=["POST"]),
+        Route("/transcribe_stream", transcribe_stream, methods=["POST"]),
         Route("/translate", translate, methods=["POST"]),
         Route("/models", list_models, methods=["GET"]),
         Route("/health", health, methods=["GET"]),

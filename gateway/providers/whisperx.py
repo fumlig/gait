@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import logging
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
 from fastapi import HTTPException
 
 from gateway.models import RawSegment, TranscriptionResult, WordTimestamp
 from gateway.providers.base import BaseProvider
 from gateway.providers.protocols import AudioTranscriptions, AudioTranslations
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +102,51 @@ class WhisperxClient(BaseProvider, AudioTranscriptions, AudioTranslations):
             raise HTTPException(status_code=resp.status_code, detail=detail)
 
         return self._parse_result(resp.json())
+
+    async def transcribe_stream(
+        self,
+        *,
+        file: bytes,
+        filename: str,
+        model: str,
+        language: str | None,
+        prompt: str | None,
+        temperature: float,
+    ) -> AsyncIterator[dict]:
+        """Stream segments from the whisperx ``/transcribe_stream`` endpoint.
+
+        Yields dicts with ``start``/``end``/``text`` for each segment,
+        then a final metadata dict with ``language``/``duration``.
+        """
+        url = f"{self._base_url}/transcribe_stream"
+
+        data: dict[str, str] = {
+            "model": model,
+            "temperature": str(temperature),
+        }
+        if language is not None:
+            data["language"] = language
+        if prompt is not None:
+            data["prompt"] = prompt
+
+        files_payload = {"file": (filename, file)}
+
+        req = self._http_client.build_request(
+            "POST", url, data=data, files=files_payload,
+        )
+        resp = await self._http_client.send(req, stream=True)
+
+        if resp.status_code != 200:
+            await resp.aread()
+            detail = resp.text or f"Backend returned HTTP {resp.status_code}"
+            raise HTTPException(status_code=resp.status_code, detail=detail)
+
+        try:
+            async for line in resp.aiter_lines():
+                if line.startswith("data: "):
+                    yield json.loads(line[6:])
+        finally:
+            await resp.aclose()
 
     @staticmethod
     def _parse_result(raw: dict) -> TranscriptionResult:

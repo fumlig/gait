@@ -2,6 +2,7 @@
 
 ## misc
 
+- consider proper audio streaming with https://github.com/davidbrowne17/chatterbox-streaming
 - separate provider protocols (only some providers need health checks and model listing)
 - improve movel auto-downloading, listing and monitoring of progress
 - add image models and image support to chat

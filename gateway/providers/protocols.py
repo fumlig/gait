@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from starlette.responses import StreamingResponse
 
     from gateway.models import (
@@ -70,6 +72,7 @@ class Embeddings(Protocol):
 @runtime_checkable
 class AudioSpeech(Protocol):
     async def synthesize(self, request: SpeechRequest) -> tuple[bytes, str]: ...
+    async def synthesize_stream(self, request: SpeechRequest) -> StreamingResponse: ...
 
 
 @runtime_checkable
@@ -86,6 +89,17 @@ class AudioTranscriptions(Protocol):
         word_timestamps: bool,
         diarize: bool = False,
     ) -> TranscriptionResult: ...
+
+    def transcribe_stream(
+        self,
+        *,
+        file: bytes,
+        filename: str,
+        model: str,
+        language: str | None,
+        prompt: str | None,
+        temperature: float,
+    ) -> AsyncIterator[dict]: ...
 
 
 @runtime_checkable

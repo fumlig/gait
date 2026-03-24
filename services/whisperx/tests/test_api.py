@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import json
 import struct
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
@@ -307,3 +308,90 @@ async def test_translate_failure(client: AsyncClient, mock_engine: MagicMock):
     )
     assert resp.status_code == 500
     assert "failed" in resp.json()["detail"].lower()
+
+
+# ===================================================================
+# Streaming transcription
+# ===================================================================
+
+MOCK_STREAM_ITEMS = [
+    {"start": 0.0, "end": 2.5, "text": "Hello world."},
+    {"start": 3.0, "end": 5.0, "text": "This is a test."},
+    {"language": "en", "duration": 5.0},
+]
+
+
+def _parse_sse(body: str) -> list[dict]:
+    """Parse SSE text into a list of data payloads."""
+    events = []
+    for block in body.strip().split("\n\n"):
+        for line in block.strip().split("\n"):
+            if line.startswith("data: "):
+                events.append(json.loads(line[6:]))
+    return events
+
+
+async def test_transcribe_stream_returns_sse(
+    client: AsyncClient, mock_engine: MagicMock
+):
+    """Streaming endpoint returns SSE with segment events and a metadata event."""
+    mock_engine.transcribe_stream.return_value = iter(MOCK_STREAM_ITEMS)
+    wav = _make_wav_bytes()
+    resp = await client.post(
+        "/transcribe_stream",
+        files={"file": ("test.wav", wav, "audio/wav")},
+        data={"model": "whisper-1"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    events = _parse_sse(resp.text)
+    assert len(events) == 3
+
+    # First two are segments
+    assert events[0]["text"] == "Hello world."
+    assert events[0]["start"] == 0.0
+    assert events[1]["text"] == "This is a test."
+
+    # Last is metadata
+    assert events[2]["language"] == "en"
+    assert events[2]["duration"] == 5.0
+    assert "text" not in events[2]
+
+    mock_engine.ensure_model.assert_called_once_with("whisper-1")
+    mock_engine.transcribe_stream.assert_called_once()
+
+
+async def test_transcribe_stream_passes_params(
+    client: AsyncClient, mock_engine: MagicMock
+):
+    """Streaming endpoint passes language, prompt, temperature to engine."""
+    mock_engine.transcribe_stream.return_value = iter(MOCK_STREAM_ITEMS)
+    wav = _make_wav_bytes()
+    await client.post(
+        "/transcribe_stream",
+        files={"file": ("test.wav", wav, "audio/wav")},
+        data={"model": "turbo", "language": "de", "prompt": "meeting", "temperature": "0.3"},
+    )
+    call_kwargs = mock_engine.transcribe_stream.call_args
+    assert call_kwargs.kwargs["language"] == "de"
+    assert call_kwargs.kwargs["prompt"] == "meeting"
+    assert call_kwargs.kwargs["temperature"] == 0.3
+
+
+async def test_transcribe_stream_empty_file(client: AsyncClient):
+    resp = await client.post(
+        "/transcribe_stream",
+        files={"file": ("test.wav", b"", "audio/wav")},
+        data={"model": "whisper-1"},
+    )
+    assert resp.status_code == 400
+
+
+async def test_transcribe_stream_missing_model(client: AsyncClient):
+    wav = _make_wav_bytes()
+    resp = await client.post(
+        "/transcribe_stream",
+        files={"file": ("test.wav", wav, "audio/wav")},
+    )
+    assert resp.status_code == 400

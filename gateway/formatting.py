@@ -93,26 +93,35 @@ def format_transcription(
     )
 
 
-def stream_transcription(result: TranscriptionResult) -> StreamingResponse:
-    """Return a TranscriptionResult as an OpenAI-compatible SSE stream.
+def stream_transcription(
+    segments: AsyncIterator[dict],
+) -> StreamingResponse:
+    """Convert a stream of segment dicts into OpenAI-compatible SSE.
 
-    Emits one ``transcript.text.delta`` per segment, then a final
-    ``transcript.text.done`` with the complete text.  This lets a
-    batch STT backend (whisperx) satisfy clients that request
-    ``stream=true``.
+    *segments* is an async iterator yielding dicts from the whisperx
+    backend.  Dicts with a ``text`` key are transcript segments; the
+    final dict carries ``language``/``duration`` metadata.
+
+    For each segment we emit a ``transcript.text.delta`` SSE event.
+    After the iterator is exhausted we emit ``transcript.text.done``
+    with the accumulated full text.
     """
 
     async def _generate() -> AsyncIterator[str]:
-        for seg in result.segments:
-            delta_event = {
-                "type": "transcript.text.delta",
-                "delta": seg.text,
-            }
-            yield f"event: transcript.text.delta\ndata: {json.dumps(delta_event)}\n\n"
+        parts: list[str] = []
+        async for item in segments:
+            text = item.get("text")
+            if text is not None:
+                parts.append(text)
+                delta_event = {
+                    "type": "transcript.text.delta",
+                    "delta": text,
+                }
+                yield f"event: transcript.text.delta\ndata: {json.dumps(delta_event)}\n\n"
 
         done_event = {
             "type": "transcript.text.done",
-            "text": result.text,
+            "text": " ".join(parts),
         }
         yield f"event: transcript.text.done\ndata: {json.dumps(done_event)}\n\n"
 

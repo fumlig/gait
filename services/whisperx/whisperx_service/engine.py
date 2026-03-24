@@ -5,9 +5,12 @@ from __future__ import annotations
 import logging
 import os
 import tempfile
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import torch
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 from whisperx_service.config import settings
 from whisperx_service.idle import IdleMixin
@@ -206,6 +209,140 @@ class WhisperXEngine(IdleMixin):
             "text": full_text,
             "duration": duration,
         }
+
+    # ------------------------------------------------------------------
+    # Streaming transcription
+    # ------------------------------------------------------------------
+
+    def transcribe_stream(
+        self,
+        audio_data: bytes,
+        *,
+        language: str | None = None,
+        prompt: str | None = None,
+        temperature: float = 0.0,
+        task: str = "transcribe",
+    ) -> Iterator[dict[str, Any]]:
+        """Yield segment dicts as the WhisperX pipeline produces them.
+
+        Each yielded dict has ``start``, ``end``, and ``text``.
+        The final yield is a metadata dict with ``language`` and
+        ``duration`` (no ``text`` key).
+
+        Alignment and diarization are skipped because they require
+        all segments up-front and are incompatible with streaming.
+        """
+        import whisperx
+        from whisperx.audio import SAMPLE_RATE
+        from whisperx.vads import Pyannote, Vad
+
+        if self._model is None:
+            raise RuntimeError("Model not loaded — call load() first")
+
+        self.touch()
+
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp:
+            tmp.write(audio_data)
+            tmp_path = tmp.name
+
+        try:
+            audio = whisperx.load_audio(tmp_path)
+        finally:
+            os.unlink(tmp_path)
+
+        pipe = self._model  # FasterWhisperPipeline
+
+        # --- VAD ---
+        if issubclass(type(pipe.vad_model), Vad):
+            waveform = pipe.vad_model.preprocess_audio(audio)
+            merge_fn = pipe.vad_model.merge_chunks
+        else:
+            waveform = Pyannote.preprocess_audio(audio)
+            merge_fn = Pyannote.merge_chunks
+
+        vad_segments = pipe.vad_model(
+            {"waveform": waveform, "sample_rate": SAMPLE_RATE},
+        )
+        vad_segments = merge_fn(
+            vad_segments,
+            30,
+            onset=pipe._vad_params["vad_onset"],
+            offset=pipe._vad_params["vad_offset"],
+        )
+
+        if not vad_segments:
+            yield {"language": language or "en", "duration": 0.0}
+            return
+
+        # --- Tokenizer ---
+        from faster_whisper.tokenizer import Tokenizer
+
+        actual_task = task or "transcribe"
+        if pipe.tokenizer is None:
+            detected_lang = language or pipe.detect_language(audio)
+            pipe.tokenizer = Tokenizer(
+                pipe.model.hf_tokenizer,
+                pipe.model.model.is_multilingual,
+                task=actual_task,
+                language=detected_lang,
+            )
+        else:
+            detected_lang = language or pipe.tokenizer.language_code
+            if (
+                actual_task != pipe.tokenizer.task
+                or detected_lang != pipe.tokenizer.language_code
+            ):
+                pipe.tokenizer = Tokenizer(
+                    pipe.model.hf_tokenizer,
+                    pipe.model.model.is_multilingual,
+                    task=actual_task,
+                    language=detected_lang,
+                )
+
+        # --- Prompt ---
+        saved_options = None
+        if prompt:
+            from dataclasses import replace
+
+            saved_options = pipe.options
+            pipe.options = replace(pipe.options, initial_prompt=prompt)
+
+        # --- Audio chunk generator ---
+        def audio_chunks():
+            for seg in vad_segments:
+                f1 = int(seg["start"] * SAMPLE_RATE)
+                f2 = int(seg["end"] * SAMPLE_RATE)
+                yield {"inputs": audio[f1:f2]}
+
+        # --- Iterate pipeline (yields per-segment results) ---
+        batch_size = settings.batch_size
+        duration = 0.0
+        try:
+            logger.info(
+                "Streaming transcription: task=%s, language=%s, segments=%d",
+                actual_task, detected_lang, len(vad_segments),
+            )
+            for idx, out in enumerate(
+                pipe(audio_chunks(), batch_size=batch_size, num_workers=0),
+            ):
+                text = out["text"]
+                if batch_size in (0, 1, None):
+                    text = text[0]
+                end = round(vad_segments[idx]["end"], 3)
+                if end > duration:
+                    duration = end
+                yield {
+                    "start": round(vad_segments[idx]["start"], 3),
+                    "end": end,
+                    "text": text.strip() if isinstance(text, str) else str(text),
+                }
+        finally:
+            if saved_options is not None:
+                pipe.options = saved_options
+            if pipe.preset_language is None:
+                pipe.tokenizer = None
+
+        yield {"language": detected_lang, "duration": duration}
 
 
 engine = WhisperXEngine()

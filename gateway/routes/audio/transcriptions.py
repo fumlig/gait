@@ -57,6 +57,18 @@ async def create_transcription(
         )
     )
 
+    if want_stream:
+        return stream_transcription(
+            client.transcribe_stream(
+                file=audio_data,
+                filename=filename,
+                model=model,
+                language=language,
+                prompt=prompt,
+                temperature=temperature,
+            ),
+        )
+
     async with backend_errors("Transcription"):
         result = await client.transcribe(
             file=audio_data,
@@ -68,8 +80,5 @@ async def create_transcription(
             word_timestamps=want_words,
             diarize=want_diarize,
         )
-
-    if want_stream:
-        return stream_transcription(result)
 
     return format_transcription(result, fmt, task="transcribe")

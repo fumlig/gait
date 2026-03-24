@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import Response
 
 from gateway.deps import SpeechClient, backend_errors
 from gateway.models import SpeechRequest, SpeechResponseFormat
 from gateway.text_preprocessing import preprocess_speech_text
+
+if TYPE_CHECKING:
+    from starlette.responses import StreamingResponse
 
 router = APIRouter()
 
@@ -21,30 +26,37 @@ _FORMAT_CONTENT_TYPES: dict[SpeechResponseFormat, str] = {
 
 
 @router.post("/v1/audio/speech")
-async def create_speech(body: SpeechRequest, client: SpeechClient) -> Response:
+async def create_speech(
+    body: SpeechRequest, client: SpeechClient,
+) -> Response | StreamingResponse:
     body.input = preprocess_speech_text(body.input)
 
+    fmt = body.response_format
+
+    # WAV: stream bytes directly from the backend, no buffering.
+    if fmt == SpeechResponseFormat.wav:
+        async with backend_errors("Speech synthesis"):
+            return await client.synthesize_stream(body)
+
+    # Other formats need the full WAV in memory for conversion.
     async with backend_errors("Speech synthesis"):
         wav_bytes, _ = await client.synthesize(body)
 
-    audio_bytes, content_type = _convert_audio(wav_bytes, body.response_format)
+    audio_bytes, content_type = _convert_audio(wav_bytes, fmt)
 
     return Response(
         content=audio_bytes,
         media_type=content_type,
         headers={
             "Content-Length": str(len(audio_bytes)),
-            "Content-Disposition": f'inline; filename="speech.{body.response_format.value}"',
+            "Content-Disposition": f'inline; filename="speech.{fmt.value}"',
         },
     )
 
 
 def _convert_audio(wav_bytes: bytes, fmt: SpeechResponseFormat) -> tuple[bytes, str]:
-    """Convert WAV to the requested format. Supports WAV (passthrough) and MP3."""
+    """Convert WAV to the requested format. Supports MP3."""
     content_type = _FORMAT_CONTENT_TYPES.get(fmt, "application/octet-stream")
-
-    if fmt == SpeechResponseFormat.wav:
-        return wav_bytes, content_type
 
     if fmt == SpeechResponseFormat.mp3:
         from gateway.formatting import wav_to_mp3

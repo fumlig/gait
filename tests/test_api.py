@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from starlette.responses import StreamingResponse
 
 from gateway.models import (
     ChatCompletionResponse,
@@ -117,6 +118,17 @@ def _make_mock_stream():
     return StreamingResponse(_gen(), media_type="text/event-stream")
 
 
+def _make_wav_streaming_response(wav_bytes: bytes = _WAV_HEADER) -> StreamingResponse:
+    """Build a StreamingResponse that yields the given WAV bytes."""
+    async def _gen():
+        yield wav_bytes
+    return StreamingResponse(
+        _gen(),
+        media_type="audio/wav",
+        headers={"Content-Length": str(len(wav_bytes))},
+    )
+
+
 def _make_speech_client(
     *,
     synthesize_result: tuple[bytes, str] = (_WAV_HEADER, "audio/wav"),
@@ -129,9 +141,23 @@ def _make_speech_client(
     client.fetch_models.return_value = CHATTERBOX_MODELS
     if synthesize_error:
         client.synthesize.side_effect = synthesize_error
+        client.synthesize_stream.side_effect = synthesize_error
     else:
         client.synthesize.return_value = synthesize_result
+        client.synthesize_stream.return_value = _make_wav_streaming_response(
+            synthesize_result[0],
+        )
     return client
+
+
+async def _mock_transcribe_stream(**kwargs):
+    """Default async generator for transcribe_stream mocking."""
+    for seg in MOCK_TRANSCRIPTION_RESULT.segments:
+        yield {"start": seg.start, "end": seg.end, "text": seg.text}
+    yield {
+        "language": MOCK_TRANSCRIPTION_RESULT.language,
+        "duration": MOCK_TRANSCRIPTION_RESULT.duration,
+    }
 
 
 def _make_transcription_client(
@@ -150,6 +176,8 @@ def _make_transcription_client(
         client.transcribe.side_effect = transcribe_error
     else:
         client.transcribe.return_value = transcribe_result or MOCK_TRANSCRIPTION_RESULT
+
+    client.transcribe_stream = _mock_transcribe_stream
 
     client.translate.return_value = translate_result or TranscriptionResult(
         text="Translated text",
@@ -506,7 +534,9 @@ async def test_speech_wav(client: AsyncClient, speech_client: AsyncMock):
     assert resp.status_code == 200
     assert resp.headers["content-type"] == "audio/wav"
     assert resp.content[:4] == b"RIFF"
-    speech_client.synthesize.assert_called_once()
+    # WAV uses streaming path — synthesize_stream, not synthesize
+    speech_client.synthesize_stream.assert_called_once()
+    speech_client.synthesize.assert_not_called()
 
 
 async def test_speech_default_format(client: AsyncClient, speech_client: AsyncMock):
@@ -516,7 +546,9 @@ async def test_speech_default_format(client: AsyncClient, speech_client: AsyncMo
         json={"model": "chatterbox-turbo", "input": "Hello", "voice": "default"},
     )
     assert resp.status_code == 200
+    # MP3 needs full buffer — uses synthesize, not synthesize_stream
     speech_client.synthesize.assert_called_once()
+    speech_client.synthesize_stream.assert_not_called()
 
     # Verify the SpeechRequest was passed correctly
     call_args = speech_client.synthesize.call_args
@@ -679,7 +711,7 @@ async def test_transcription_empty_file(client: AsyncClient):
 
 
 async def test_transcription_stream(client: AsyncClient, transcription_client: AsyncMock):
-    """Streaming transcription returns SSE events."""
+    """Streaming transcription returns SSE events streamed from the backend."""
     resp = await client.post(
         "/v1/audio/transcriptions",
         files={"file": ("test.wav", b"fake-wav", "audio/wav")},
@@ -714,17 +746,18 @@ async def test_transcription_stream(client: AsyncClient, transcription_client: A
     assert events[2][1]["text"] == "Hello world. This is a test."
 
 
-async def test_transcription_stream_no_word_timestamps(
+async def test_transcription_stream_uses_stream_endpoint(
     client: AsyncClient, transcription_client: AsyncMock
 ):
-    """Streaming mode does not request word timestamps."""
-    await client.post(
+    """Streaming mode calls transcribe_stream, not transcribe."""
+    resp = await client.post(
         "/v1/audio/transcriptions",
         files={"file": ("test.wav", b"fake-wav", "audio/wav")},
         data={"model": "whisper-1", "stream": "true"},
     )
-    call_kwargs = transcription_client.transcribe.call_args.kwargs
-    assert call_kwargs["word_timestamps"] is False
+    assert resp.status_code == 200
+    # transcribe (non-streaming) should NOT have been called
+    transcription_client.transcribe.assert_not_called()
 
 
 async def test_transcription_backend_unavailable(
