@@ -678,6 +678,55 @@ async def test_transcription_empty_file(client: AsyncClient):
     assert resp.status_code == 400
 
 
+async def test_transcription_stream(client: AsyncClient, transcription_client: AsyncMock):
+    """Streaming transcription returns SSE events."""
+    resp = await client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("test.wav", b"fake-wav", "audio/wav")},
+        data={"model": "whisper-1", "stream": "true"},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    import json
+
+    body = resp.text
+    events = []
+    for block in body.strip().split("\n\n"):
+        lines = block.strip().split("\n")
+        event_type = None
+        data = None
+        for line in lines:
+            if line.startswith("event: "):
+                event_type = line[len("event: "):]
+            elif line.startswith("data: "):
+                data = json.loads(line[len("data: "):])
+        if event_type and data:
+            events.append((event_type, data))
+
+    # Two segments → two deltas, then one done event
+    assert len(events) == 3
+    assert events[0][0] == "transcript.text.delta"
+    assert events[0][1]["delta"] == "Hello world."
+    assert events[1][0] == "transcript.text.delta"
+    assert events[1][1]["delta"] == "This is a test."
+    assert events[2][0] == "transcript.text.done"
+    assert events[2][1]["text"] == "Hello world. This is a test."
+
+
+async def test_transcription_stream_no_word_timestamps(
+    client: AsyncClient, transcription_client: AsyncMock
+):
+    """Streaming mode does not request word timestamps."""
+    await client.post(
+        "/v1/audio/transcriptions",
+        files={"file": ("test.wav", b"fake-wav", "audio/wav")},
+        data={"model": "whisper-1", "stream": "true"},
+    )
+    call_kwargs = transcription_client.transcribe.call_args.kwargs
+    assert call_kwargs["word_timestamps"] is False
+
+
 async def test_transcription_backend_unavailable(
     client: AsyncClient, transcription_client: AsyncMock
 ):

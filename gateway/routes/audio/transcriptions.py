@@ -5,11 +5,11 @@ from typing import TYPE_CHECKING
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 
 from gateway.deps import TranscriptionClient, backend_errors
-from gateway.formatting import format_transcription
+from gateway.formatting import format_transcription, stream_transcription
 from gateway.models import TranscriptionResponseFormat
 
 if TYPE_CHECKING:
-    from starlette.responses import Response
+    from starlette.responses import Response, StreamingResponse
 
 router = APIRouter()
 
@@ -25,17 +25,21 @@ async def create_transcription(
     temperature: float = Form(0.0),
     timestamp_granularities: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     diarize: str = Form("false"),
-) -> Response:
-    try:
-        fmt = TranscriptionResponseFormat(response_format)
-    except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                f"Invalid response_format '{response_format}'."
-                " Use one of: json, text, srt, verbose_json, vtt."
-            ),
-        ) from None
+    stream: str = Form("false"),
+) -> Response | StreamingResponse:
+    want_stream = stream.lower() == "true"
+
+    if not want_stream:
+        try:
+            fmt = TranscriptionResponseFormat(response_format)
+        except ValueError:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Invalid response_format '{response_format}'."
+                    " Use one of: json, text, srt, verbose_json, vtt."
+                ),
+            ) from None
 
     audio_data = await file.read()
     if not audio_data:
@@ -45,9 +49,12 @@ async def create_transcription(
     want_diarize = diarize.lower() == "true"
 
     want_words = (
-        fmt == TranscriptionResponseFormat.verbose_json
-        or (timestamp_granularities is not None and "word" in timestamp_granularities)
-        or want_diarize  # diarization needs word alignment
+        not want_stream
+        and (
+            fmt == TranscriptionResponseFormat.verbose_json
+            or (timestamp_granularities is not None and "word" in timestamp_granularities)
+            or want_diarize  # diarization needs word alignment
+        )
     )
 
     async with backend_errors("Transcription"):
@@ -61,5 +68,8 @@ async def create_transcription(
             word_timestamps=want_words,
             diarize=want_diarize,
         )
+
+    if want_stream:
+        return stream_transcription(result)
 
     return format_transcription(result, fmt, task="transcribe")

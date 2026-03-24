@@ -5,10 +5,12 @@ TTS/STT audio conversion (WAV ↔ PCM16, WAV → MP3).
 from __future__ import annotations
 
 import io
+import json
 import logging
 from typing import TYPE_CHECKING
 
 from fastapi.responses import PlainTextResponse, Response
+from starlette.responses import StreamingResponse
 
 from gateway.models import (
     Segment,
@@ -19,6 +21,8 @@ from gateway.models import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+
     from gateway.models import TranscriptionResult
 
 logger = logging.getLogger(__name__)
@@ -86,6 +90,36 @@ def format_transcription(
     return Response(
         content=TranscriptionResponse(text=result.text).model_dump_json(),
         media_type="application/json",
+    )
+
+
+def stream_transcription(result: TranscriptionResult) -> StreamingResponse:
+    """Return a TranscriptionResult as an OpenAI-compatible SSE stream.
+
+    Emits one ``transcript.text.delta`` per segment, then a final
+    ``transcript.text.done`` with the complete text.  This lets a
+    batch STT backend (whisperx) satisfy clients that request
+    ``stream=true``.
+    """
+
+    async def _generate() -> AsyncIterator[str]:
+        for seg in result.segments:
+            delta_event = {
+                "type": "transcript.text.delta",
+                "delta": seg.text,
+            }
+            yield f"event: transcript.text.delta\ndata: {json.dumps(delta_event)}\n\n"
+
+        done_event = {
+            "type": "transcript.text.done",
+            "text": result.text,
+        }
+        yield f"event: transcript.text.done\ndata: {json.dumps(done_event)}\n\n"
+
+    return StreamingResponse(
+        _generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 
