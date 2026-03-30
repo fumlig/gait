@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         TranscriptionResult,
         Voice,
     )
+    from gateway.models.responses import ResponseStreamEvent
 
 
 @runtime_checkable
@@ -57,9 +58,9 @@ class Responses(Protocol):
         self, body: CreateResponseRequest,
     ) -> CreateResponseResponse: ...
 
-    async def create_response_stream(
+    def create_response_stream(
         self, body: CreateResponseRequest,
-    ) -> StreamingResponse: ...
+    ) -> AsyncIterator[ResponseStreamEvent]: ...
 
 
 @runtime_checkable

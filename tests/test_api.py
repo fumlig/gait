@@ -4,7 +4,7 @@ import json
 import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -116,6 +116,21 @@ def _make_mock_stream():
         yield b"data: [DONE]\n\n"
 
     return StreamingResponse(_gen(), media_type="text/event-stream")
+
+
+def _make_mock_response_stream():
+    """Return an async iterator of typed ResponseStreamEvent models."""
+    from gateway.models.responses import ResponseCompletedEvent, ResponseCreatedEvent
+
+    async def _gen():
+        yield ResponseCreatedEvent.model_validate({
+            "response": {"id": "r", "model": "m", "status": "in_progress"},
+        })
+        yield ResponseCompletedEvent.model_validate({
+            "response": {"id": "r", "model": "m", "status": "completed"},
+        })
+
+    return _gen()
 
 
 def _make_wav_streaming_response(wav_bytes: bytes = _WAV_HEADER) -> StreamingResponse:
@@ -350,7 +365,7 @@ def _make_chat_client() -> AsyncMock:
 
     # Responses
     client.create_response.return_value = MOCK_RESPONSE
-    client.create_response_stream.return_value = _make_mock_stream()
+    client.create_response_stream = Mock(return_value=_make_mock_response_stream())
 
     # Embeddings
     client.embeddings.return_value = MOCK_EMBEDDINGS
@@ -2957,48 +2972,48 @@ async def test_responses_reasoning_streaming(
     client: AsyncClient, chat_client: AsyncMock,
 ):
     """Streaming with reasoning returns SSE events including reasoning items."""
-    from starlette.responses import StreamingResponse
+    from gateway.models.responses import (
+        OutputTextDeltaEvent,
+        ResponseCompletedEvent,
+    )
 
     async def _gen():
-        # Reasoning summary event
-        yield (
-            b'event: response.reasoning_summary_part.added\n'
-            b'data: {"type":"response.reasoning_summary_part.added",'
-            b'"item_id":"rs_001","part":{"type":"summary_text","text":""}}\n\n'
-        )
-        yield (
-            b'event: response.reasoning_summary_text.delta\n'
-            b'data: {"type":"response.reasoning_summary_text.delta",'
-            b'"item_id":"rs_001","delta":"Thinking about math..."}\n\n'
-        )
-        yield (
-            b'event: response.reasoning_summary_text.done\n'
-            b'data: {"type":"response.reasoning_summary_text.done",'
-            b'"item_id":"rs_001","text":"Thinking about math..."}\n\n'
-        )
         # Message content event
-        yield (
-            b'event: response.output_text.delta\n'
-            b'data: {"type":"response.output_text.delta",'
-            b'"item_id":"msg_001","delta":"42"}\n\n'
-        )
-        yield (
-            b'event: response.completed\n'
-            b'data: {"type":"response.completed","response":{'
-            b'"id":"resp-r1","object":"response","model":"my-model",'
-            b'"output":[{"type":"reasoning","id":"rs_001","summary":'
-            b'[{"type":"summary_text","text":"Thinking about math..."}]},'
-            b'{"type":"message","id":"msg_001","role":"assistant",'
-            b'"content":[{"type":"output_text","text":"42"}]}],'
-            b'"status":"completed","usage":{"input_tokens":10,'
-            b'"output_tokens":100,"total_tokens":110,'
-            b'"output_tokens_details":{"reasoning_tokens":64},'
-            b'"input_tokens_details":{"cached_tokens":0}}}}\n\n'
-        )
+        yield OutputTextDeltaEvent.model_validate({
+            "delta": "42",
+        })
+        # Completed event with reasoning in the output
+        yield ResponseCompletedEvent.model_validate({
+            "response": {
+                "id": "resp-r1",
+                "model": "my-model",
+                "output": [
+                    {
+                        "type": "reasoning",
+                        "id": "rs_001",
+                        "summary": [
+                            {"type": "summary_text", "text": "Thinking about math..."},
+                        ],
+                    },
+                    {
+                        "type": "message",
+                        "id": "msg_001",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "42"}],
+                    },
+                ],
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 10,
+                    "output_tokens": 100,
+                    "total_tokens": 110,
+                    "output_tokens_details": {"reasoning_tokens": 64},
+                    "input_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        })
 
-    chat_client.create_response_stream.return_value = StreamingResponse(
-        _gen(), media_type="text/event-stream",
-    )
+    chat_client.create_response_stream = Mock(return_value=_gen())
 
     resp = await client.post(
         "/v1/responses",
@@ -3018,11 +3033,11 @@ async def test_responses_reasoning_streaming(
     assert call_args.reasoning.effort == "high"
     assert call_args.reasoning.summary == "auto"
 
-    # Parse events — reasoning summary events should be present
+    # Parse events — reasoning items and tokens should be present
     text = resp.text
-    assert "reasoning_summary" in text
     assert "Thinking about math..." in text
     assert "reasoning_tokens" in text
+    assert "data: [DONE]" in text
 
 
 async def test_responses_reasoning_with_tools(
