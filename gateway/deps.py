@@ -13,6 +13,7 @@ import logging
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Annotated
 
+import httpx
 from fastapi import Depends, HTTPException, Request
 
 from gateway.providers.protocols import (
@@ -93,6 +94,12 @@ async def backend_errors(label: str) -> AsyncIterator[None]:
         yield
     except HTTPException:
         raise
+    except httpx.RemoteProtocolError:
+        logger.warning("%s: backend disconnected (crashed or restarting)", label)
+        raise HTTPException(
+            status_code=503,
+            detail=f"{label}: backend disconnected (crashed or restarting). Retry shortly.",
+        )
     except Exception as exc:
         logger.exception("%s failed", label)
         raise HTTPException(status_code=502, detail=f"{label} unavailable.") from exc

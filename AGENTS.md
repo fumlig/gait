@@ -148,7 +148,7 @@ gait/
 ### docker-compose.yml
 - Only the gateway exposes a host port (`GATEWAY_PORT`). Backend services communicate over the internal Docker network.
 - Every volume path and env var should be configurable via `${VAR:-default}` syntax.
-- Mount `HF_HOME` from host for audio model weight caching; `MODELS_DIR` (or `LLAMA_CACHE`) for LLM weights.
+- Mount `HF_HOME` from host for model weight caching (audio services and llama.cpp). Mount `LLAMA_CACHE` for the llama.cpp native cache.
 - Pass `HF_TOKEN` for gated model access.
 - Use `deploy.resources.reservations.devices` for GPU passthrough (GPU services only).
 - Set `restart: unless-stopped` and a healthcheck with generous `start_period` (models take time to load).

@@ -88,11 +88,19 @@ services:
   llamacpp:
     build:
       context: .
-      dockerfile: services/llamacpp/Dockerfile
+      # dockerfile: services/llamacpp/Dockerfile
+      # args:
+      #   - LLAMA_SERVER_TAG=${LLAMA_SERVER_TAG:-server-cuda}
+      dockerfile: services/llamacpp/source.Dockerfile
       args:
-        - LLAMA_SERVER_TAG=${LLAMA_SERVER_TAG:-server-cuda}
+        - CUDA_VERSION=${CUDA_VERSION:-12.4.0}
+        - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
+        - LLAMA_REPO=${LLAMA_REPO:-https://github.com/krystophny/llama.cpp.git}
+        - LLAMA_BRANCH=${LLAMA_BRANCH:-responses-api-codex-compat}
+        - CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH:-default}
     volumes:
-      - ${MODELS_DIR:-${LLAMA_CACHE:-./models}}:/root/.cache/llama.cpp
+      - ${LLAMA_CACHE:-./models}:/root/.cache/llama.cpp
+      - ${HF_HOME:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
     environment:
       - LLAMA_ARG_MODEL=${LLAMA_MODEL:-}
       - LLAMA_ARG_HF_REPO=${LLAMA_HF_REPO:-unsloth/Qwen3.5-35B-A3B-GGUF:UD-Q4_K_XL}

@@ -31,6 +31,6 @@ Key variables (set in `docker-compose.yml`):
 
 ## Model files
 
-**Auto-download** (default): Set `LLAMA_HF_REPO`. Cached in `MODELS_DIR` (default: `./models`).
+**Auto-download** (default): Set `LLAMA_HF_REPO`. Cached in the HuggingFace hub cache (`HF_HOME`). The llama.cpp native cache (`LLAMA_CACHE`) is also mounted.
 
 **Local file**: Set `LLAMA_MODEL` to a container path.
