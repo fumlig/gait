@@ -167,12 +167,20 @@ def _make_speech_client(
 
 async def _mock_transcribe_stream(**kwargs):
     """Default async generator for transcribe_stream mocking."""
+    from gateway.models.audio import (
+        TranscriptionCompletedEvent,
+        TranscriptionCreatedEvent,
+        TranscriptionTextDeltaEvent,
+        TranscriptionTextDoneEvent,
+    )
+
+    yield TranscriptionCreatedEvent()
+    parts: list[str] = []
     for seg in MOCK_TRANSCRIPTION_RESULT.segments:
-        yield {"start": seg.start, "end": seg.end, "text": seg.text}
-    yield {
-        "language": MOCK_TRANSCRIPTION_RESULT.language,
-        "duration": MOCK_TRANSCRIPTION_RESULT.duration,
-    }
+        parts.append(seg.text)
+        yield TranscriptionTextDeltaEvent(delta=seg.text)
+    yield TranscriptionTextDoneEvent(text=" ".join(parts))
+    yield TranscriptionCompletedEvent()
 
 
 def _make_transcription_client(
@@ -738,6 +746,7 @@ async def test_transcription_stream(client: AsyncClient, transcription_client: A
     import json
 
     body = resp.text
+    assert "data: [DONE]" in body
     events = []
     for block in body.strip().split("\n\n"):
         lines = block.strip().split("\n")
@@ -746,19 +755,21 @@ async def test_transcription_stream(client: AsyncClient, transcription_client: A
         for line in lines:
             if line.startswith("event: "):
                 event_type = line[len("event: "):]
-            elif line.startswith("data: "):
+            elif line.startswith("data: ") and not line.startswith("data: [DONE]"):
                 data = json.loads(line[len("data: "):])
         if event_type and data:
             events.append((event_type, data))
 
-    # Two segments → two deltas, then one done event
-    assert len(events) == 3
-    assert events[0][0] == "transcript.text.delta"
-    assert events[0][1]["delta"] == "Hello world."
-    assert events[1][0] == "transcript.text.delta"
-    assert events[1][1]["delta"] == "This is a test."
-    assert events[2][0] == "transcript.text.done"
-    assert events[2][1]["text"] == "Hello world. This is a test."
+    # created + two deltas + done + completed
+    assert len(events) == 5
+    assert events[0][0] == "transcription.created"
+    assert events[1][0] == "transcription.text.delta"
+    assert events[1][1]["delta"] == "Hello world."
+    assert events[2][0] == "transcription.text.delta"
+    assert events[2][1]["delta"] == "This is a test."
+    assert events[3][0] == "transcription.text.done"
+    assert events[3][1]["text"] == "Hello world. This is a test."
+    assert events[4][0] == "transcription.completed"
 
 
 async def test_transcription_stream_uses_stream_endpoint(

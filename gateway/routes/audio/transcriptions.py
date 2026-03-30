@@ -1,17 +1,43 @@
+"""POST /v1/audio/transcriptions — proxied to the transcription provider.
+
+Streaming transcriptions are received as typed
+``TranscriptionStreamEvent`` models from the provider and serialized
+into SSE frames using FastAPI's ``EventSourceResponse`` and
+``format_sse_event``.
+"""
+
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import EventSourceResponse
+from fastapi.sse import format_sse_event
+from pydantic import TypeAdapter
 
 from gateway.deps import TranscriptionClient, backend_errors
-from gateway.formatting import format_transcription, stream_transcription
+from gateway.formatting import format_transcription
 from gateway.models import TranscriptionResponseFormat
+from gateway.models.audio import TranscriptionStreamEvent
 
 if TYPE_CHECKING:
-    from starlette.responses import Response, StreamingResponse
+    from collections.abc import AsyncIterator
+
+    from starlette.responses import Response
+
+_stream_event_adapter = TypeAdapter(TranscriptionStreamEvent)
 
 router = APIRouter()
+
+
+async def _serialize_events(
+    events: AsyncIterator[TranscriptionStreamEvent],
+) -> AsyncIterator[bytes]:
+    """Serialize typed transcription events into SSE wire format."""
+    async for event in events:
+        data_str = _stream_event_adapter.dump_json(event).decode()
+        yield format_sse_event(data_str=data_str, event=event.type)
+    yield format_sse_event(data_str="[DONE]")
 
 
 @router.post("/v1/audio/transcriptions", response_model=None)
@@ -26,7 +52,7 @@ async def create_transcription(
     timestamp_granularities: list[str] | None = Form(None, alias="timestamp_granularities[]"),
     diarize: str = Form("false"),
     stream: str = Form("false"),
-) -> Response | StreamingResponse:
+) -> Response | EventSourceResponse:
     want_stream = stream.lower() == "true"
 
     if not want_stream:
@@ -58,14 +84,16 @@ async def create_transcription(
     )
 
     if want_stream:
-        return stream_transcription(
-            client.transcribe_stream(
-                file=audio_data,
-                filename=filename,
-                model=model,
-                language=language,
-                prompt=prompt,
-                temperature=temperature,
+        return EventSourceResponse(
+            _serialize_events(
+                client.transcribe_stream(
+                    file=audio_data,
+                    filename=filename,
+                    model=model,
+                    language=language,
+                    prompt=prompt,
+                    temperature=temperature,
+                ),
             ),
         )
 

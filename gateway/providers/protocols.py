@@ -27,6 +27,7 @@ if TYPE_CHECKING:
         TranscriptionResult,
         Voice,
     )
+    from gateway.models.audio import TranscriptionStreamEvent
     from gateway.models.responses import ResponseStreamEvent
 
 
@@ -100,7 +101,7 @@ class AudioTranscriptions(Protocol):
         language: str | None,
         prompt: str | None,
         temperature: float,
-    ) -> AsyncIterator[dict]: ...
+    ) -> AsyncIterator[TranscriptionStreamEvent]: ...
 
 
 @runtime_checkable

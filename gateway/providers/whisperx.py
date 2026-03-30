@@ -9,6 +9,13 @@ from typing import TYPE_CHECKING, ClassVar
 from fastapi import HTTPException
 
 from gateway.models import RawSegment, TranscriptionResult, WordTimestamp
+from gateway.models.audio import (
+    TranscriptionCompletedEvent,
+    TranscriptionCreatedEvent,
+    TranscriptionStreamEvent,
+    TranscriptionTextDeltaEvent,
+    TranscriptionTextDoneEvent,
+)
 from gateway.providers.base import BaseProvider
 from gateway.providers.protocols import AudioTranscriptions, AudioTranslations
 
@@ -113,11 +120,14 @@ class WhisperxClient(BaseProvider, AudioTranscriptions, AudioTranslations):
         language: str | None,
         prompt: str | None,
         temperature: float,
-    ) -> AsyncIterator[dict]:
-        """Stream segments from the whisperx ``/transcribe_stream`` endpoint.
+    ) -> AsyncIterator[TranscriptionStreamEvent]:
+        """Stream transcription events from the whisperx backend.
 
-        Yields dicts with ``start``/``end``/``text`` for each segment,
-        then a final metadata dict with ``language``/``duration``.
+        The upstream ``/transcribe_stream`` endpoint yields raw segment
+        dicts.  This method converts them into typed
+        ``TranscriptionStreamEvent`` models: a ``created`` event first,
+        then a ``text.delta`` for each segment, a ``text.done`` with the
+        accumulated text, and finally a ``completed`` event.
         """
         url = f"{self._base_url}/transcribe_stream"
 
@@ -142,12 +152,23 @@ class WhisperxClient(BaseProvider, AudioTranscriptions, AudioTranslations):
             detail = resp.text or f"Backend returned HTTP {resp.status_code}"
             raise HTTPException(status_code=resp.status_code, detail=detail)
 
+        yield TranscriptionCreatedEvent()
+
+        parts: list[str] = []
         try:
             async for line in resp.aiter_lines():
-                if line.startswith("data: "):
-                    yield json.loads(line[6:])
+                if not line.startswith("data: "):
+                    continue
+                item = json.loads(line[6:])
+                text = item.get("text")
+                if text is not None:
+                    parts.append(text)
+                    yield TranscriptionTextDeltaEvent(delta=text)
         finally:
             await resp.aclose()
+
+        yield TranscriptionTextDoneEvent(text=" ".join(parts))
+        yield TranscriptionCompletedEvent()
 
     @staticmethod
     def _parse_result(raw: dict) -> TranscriptionResult:

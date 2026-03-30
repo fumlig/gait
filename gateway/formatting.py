@@ -5,12 +5,10 @@ TTS/STT audio conversion (WAV ↔ PCM16, WAV → MP3).
 from __future__ import annotations
 
 import io
-import json
 import logging
 from typing import TYPE_CHECKING
 
 from fastapi.responses import PlainTextResponse, Response
-from starlette.responses import StreamingResponse
 
 from gateway.models import (
     Segment,
@@ -21,8 +19,6 @@ from gateway.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator
-
     from gateway.models import TranscriptionResult
 
 logger = logging.getLogger(__name__)
@@ -90,45 +86,6 @@ def format_transcription(
     return Response(
         content=TranscriptionResponse(text=result.text).model_dump_json(),
         media_type="application/json",
-    )
-
-
-def stream_transcription(
-    segments: AsyncIterator[dict],
-) -> StreamingResponse:
-    """Convert a stream of segment dicts into OpenAI-compatible SSE.
-
-    *segments* is an async iterator yielding dicts from the whisperx
-    backend.  Dicts with a ``text`` key are transcript segments; the
-    final dict carries ``language``/``duration`` metadata.
-
-    For each segment we emit a ``transcript.text.delta`` SSE event.
-    After the iterator is exhausted we emit ``transcript.text.done``
-    with the accumulated full text.
-    """
-
-    async def _generate() -> AsyncIterator[str]:
-        parts: list[str] = []
-        async for item in segments:
-            text = item.get("text")
-            if text is not None:
-                parts.append(text)
-                delta_event = {
-                    "type": "transcript.text.delta",
-                    "delta": text,
-                }
-                yield f"event: transcript.text.delta\ndata: {json.dumps(delta_event)}\n\n"
-
-        done_event = {
-            "type": "transcript.text.done",
-            "text": " ".join(parts),
-        }
-        yield f"event: transcript.text.done\ndata: {json.dumps(done_event)}\n\n"
-
-    return StreamingResponse(
-        _generate(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
 
 

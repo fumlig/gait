@@ -1,10 +1,18 @@
-"""Audio: speech, transcription, translation, and voice management."""
+"""Audio: speech, transcription, translation, and voice management.
+
+Some upstream providers omit fields that the OpenAI specification marks
+as always-present in audio transcription streaming events.  The typed
+event models in this module declare all spec-required fields with
+sensible defaults so that ``model_validate`` transparently fills them
+in, just like the Responses API event models in ``responses.py``.
+"""
 
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag
 
 # ---------------------------------------------------------------------------
 # Enums
@@ -125,6 +133,79 @@ class TranscriptionResult(BaseModel):
     language: str = ""
     duration: float = 0.0
     segments: list[RawSegment] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Transcription streaming — event models
+#
+# The OpenAI audio transcription streaming API emits typed SSE events.
+# Each model uses a Literal ``type`` discriminator and is combined into
+# the ``TranscriptionStreamEvent`` union, mirroring the pattern in
+# ``responses.py``.
+# ---------------------------------------------------------------------------
+
+
+class TranscriptionLogprob(BaseModel):
+    """A single token log-probability entry."""
+
+    model_config = ConfigDict(extra="allow")
+
+    token: str = ""
+    logprob: float = 0.0
+    bytes: list[int] | None = None
+
+
+class TranscriptionCreatedEvent(BaseModel):
+    """``transcription.created`` — initial lifecycle event."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["transcription.created"] = "transcription.created"
+
+
+class TranscriptionTextDeltaEvent(BaseModel):
+    """``transcription.text.delta`` — incremental transcript text."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["transcription.text.delta"] = "transcription.text.delta"
+    delta: str = ""
+    logprobs: list[TranscriptionLogprob] = Field(default_factory=list)
+
+
+class TranscriptionTextDoneEvent(BaseModel):
+    """``transcription.text.done`` — accumulated full transcript text."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["transcription.text.done"] = "transcription.text.done"
+    text: str = ""
+    logprobs: list[TranscriptionLogprob] = Field(default_factory=list)
+
+
+class TranscriptionCompletedEvent(BaseModel):
+    """``transcription.completed`` — final lifecycle event."""
+
+    model_config = ConfigDict(extra="allow")
+
+    type: Literal["transcription.completed"] = "transcription.completed"
+
+
+def _get_transcription_event_discriminator(v: Any) -> str:
+    """Extract the ``type`` tag for discriminated-union dispatch."""
+    if isinstance(v, dict):
+        return v.get("type", "")
+    return getattr(v, "type", "")
+
+
+TranscriptionStreamEvent = Annotated[
+    Annotated[TranscriptionCreatedEvent, Tag("transcription.created")]
+    | Annotated[TranscriptionTextDeltaEvent, Tag("transcription.text.delta")]
+    | Annotated[TranscriptionTextDoneEvent, Tag("transcription.text.done")]
+    | Annotated[TranscriptionCompletedEvent, Tag("transcription.completed")],
+    Discriminator(_get_transcription_event_discriminator),
+]
+"""Discriminated union of audio transcription streaming event types."""
 
 
 # ---------------------------------------------------------------------------
