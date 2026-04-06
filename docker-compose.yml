@@ -91,12 +91,12 @@ services:
       # dockerfile: services/llamacpp/Dockerfile
       # args:
       #   - LLAMA_SERVER_TAG=${LLAMA_SERVER_TAG:-server-cuda}
-      dockerfile: services/llamacpp/source.Dockerfile
+      dockerfile: services/llamacpp/Dockerfile
       args:
         - CUDA_VERSION=${CUDA_VERSION:-12.4.0}
         - UBUNTU_VERSION=${UBUNTU_VERSION:-22.04}
-        - LLAMA_REPO=${LLAMA_REPO:-https://github.com/krystophny/llama.cpp.git}
-        - LLAMA_BRANCH=${LLAMA_BRANCH:-responses-api-codex-compat}
+        - LLAMA_REPO=${LLAMA_REPO:-https://github.com/ggml-org/llama.cpp.git}
+        - LLAMA_BRANCH=${LLAMA_BRANCH:-master}
         - CUDA_DOCKER_ARCH=${CUDA_DOCKER_ARCH:-default}
     volumes:
       - ${LLAMA_CACHE:-./models}:/root/.cache/llama.cpp
