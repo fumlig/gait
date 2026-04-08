@@ -5,9 +5,18 @@ import logging
 import time
 from typing import TYPE_CHECKING
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 
-from gateway.models import ModelListResponse, ModelObject
+from gateway.deps import backend_errors
+from gateway.models import (
+    LoadModelRequest,
+    LoadModelResponse,
+    ModelListResponse,
+    ModelObject,
+    UnloadModelRequest,
+    UnloadModelResponse,
+)
+from gateway.providers.protocols import ModelManagement
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -92,3 +101,86 @@ async def get_models(app: FastAPI) -> list[ModelObject]:
 async def list_models(request: Request) -> ModelListResponse:
     result = await get_models(request.app)
     return ModelListResponse(data=result)
+
+
+# ---------------------------------------------------------------------------
+# Model management (gait extension — not in the OpenAI API)
+# ---------------------------------------------------------------------------
+
+
+def _invalidate_models_cache(app: FastAPI) -> None:
+    """Force the next ``get_models`` call to refresh from providers."""
+    app.state.models_fetched_at = 0.0
+
+
+async def _find_manager_for_model(
+    app: FastAPI, model_id: str,
+) -> ModelManagement:
+    """Look up the provider that owns ``model_id`` and return it as a manager.
+
+    Raises ``HTTPException(404)`` if no provider owns the model, and
+    ``HTTPException(400)`` if the owning provider does not implement
+    the ``ModelManagement`` protocol.
+    """
+    models: list[ModelObject] = await get_models(app)
+    owner: str | None = None
+    for m in models:
+        if m.id == model_id:
+            owner = m.owned_by
+            break
+    if owner is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Unknown model '{model_id}'.",
+        )
+
+    providers: list[BaseProvider] = getattr(app.state, "providers", [])
+    for provider in providers:
+        if provider.name != owner:
+            continue
+        if not isinstance(provider, ModelManagement):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Provider '{owner}' does not support model "
+                    f"management (load/unload)."
+                ),
+            )
+        return provider
+
+    raise HTTPException(
+        status_code=404,
+        detail=f"No provider '{owner}' registered for model '{model_id}'.",
+    )
+
+
+@router.post(
+    "/v1/models/load",
+    response_model=LoadModelResponse,
+    response_model_exclude_unset=True,
+)
+async def load_model(
+    body: LoadModelRequest,
+    request: Request,
+) -> LoadModelResponse:
+    manager = await _find_manager_for_model(request.app, body.model)
+    async with backend_errors("Model load"):
+        result = await manager.load_model(body.model)
+    _invalidate_models_cache(request.app)
+    return result
+
+
+@router.post(
+    "/v1/models/unload",
+    response_model=UnloadModelResponse,
+    response_model_exclude_unset=True,
+)
+async def unload_model(
+    body: UnloadModelRequest,
+    request: Request,
+) -> UnloadModelResponse:
+    manager = await _find_manager_for_model(request.app, body.model)
+    async with backend_errors("Model unload"):
+        result = await manager.unload_model(body.model)
+    _invalidate_models_cache(request.app)
+    return result

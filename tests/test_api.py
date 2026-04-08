@@ -15,9 +15,12 @@ from gateway.models import (
     CompletionResponse,
     CreateResponseResponse,
     EmbeddingResponse,
+    LoadModelResponse,
     ModelObject,
+    ModelStatus,
     RawSegment,
     TranscriptionResult,
+    UnloadModelResponse,
     WordTimestamp,
 )
 from gateway.providers.voice import VoiceClient
@@ -30,9 +33,9 @@ if TYPE_CHECKING:
 CHATTERBOX_MODELS = [
     ModelObject(
         id="chatterbox-turbo",
-        owned_by="resemble-ai",
+        owned_by="chatterbox",
         capabilities=["speech"],
-        loaded=True,
+        status=ModelStatus(value="loaded"),
     ),
 ]
 
@@ -41,13 +44,13 @@ WHISPERX_MODELS = [
         id="whisper-1",
         owned_by="whisperx",
         capabilities=["transcription", "translation"],
-        loaded=True,
+        status=ModelStatus(value="loaded"),
     ),
     ModelObject(
         id="large-v3",
         owned_by="whisperx",
         capabilities=["transcription", "translation"],
-        loaded=True,
+        status=ModelStatus(value="sleeping"),
     ),
 ]
 
@@ -58,7 +61,13 @@ LLAMACPP_MODELS = [
         # Native llama-server shape (Ollama-style): "completion" +
         # "multimodal" for a vision/audio-capable model.
         capabilities=["completion", "multimodal"],
-        loaded=True,
+        status=ModelStatus(value="loaded"),
+    ),
+    ModelObject(
+        id="other-preset",
+        owned_by="llamacpp",
+        capabilities=["completion"],
+        status=ModelStatus(value="unloaded"),
     ),
 ]
 
@@ -146,6 +155,29 @@ def _make_wav_streaming_response(wav_bytes: bytes = _WAV_HEADER) -> StreamingRes
     )
 
 
+def _install_model_management_mocks(client: AsyncMock, name: str) -> None:
+    """Attach ``load_model``/``unload_model`` mocks to a provider client.
+
+    Explicit assignment is required so that ``isinstance(client,
+    ModelManagement)`` succeeds — AsyncMock lazily auto-creates
+    attributes, which is not enough for runtime-checkable Protocols.
+    """
+    client.load_model = AsyncMock(
+        side_effect=lambda model: LoadModelResponse(
+            success=True,
+            model=model,
+            status=ModelStatus(value="loaded"),
+        ),
+    )
+    client.unload_model = AsyncMock(
+        side_effect=lambda model: UnloadModelResponse(
+            success=True,
+            model=model,
+            status=ModelStatus(value="unloaded"),
+        ),
+    )
+
+
 def _make_speech_client(
     *,
     synthesize_result: tuple[bytes, str] = (_WAV_HEADER, "audio/wav"),
@@ -156,6 +188,7 @@ def _make_speech_client(
     client.base_url = "http://chatterbox:8000"
     client.check_health.return_value = {"status": "healthy"}
     client.fetch_models.return_value = CHATTERBOX_MODELS
+    _install_model_management_mocks(client, "chatterbox")
     if synthesize_error:
         client.synthesize.side_effect = synthesize_error
         client.synthesize_stream.side_effect = synthesize_error
@@ -196,6 +229,7 @@ def _make_transcription_client(
     client.base_url = "http://whisperx:8000"
     client.check_health.return_value = {"status": "healthy"}
     client.fetch_models.return_value = WHISPERX_MODELS
+    _install_model_management_mocks(client, "whisperx")
 
     if transcribe_error:
         client.transcribe.side_effect = transcribe_error
@@ -364,6 +398,7 @@ def _make_chat_client() -> AsyncMock:
     client.base_url = "http://llamacpp:8000"
     client.check_health.return_value = {"status": "healthy"}
     client.fetch_models.return_value = LLAMACPP_MODELS
+    _install_model_management_mocks(client, "llamacpp")
 
     # ChatCompletions
     client.chat_completions.return_value = MOCK_CHAT_COMPLETION
@@ -495,6 +530,7 @@ async def test_list_models_merged(client: AsyncClient):
     assert "whisper-1" in model_ids
     assert "large-v3" in model_ids
     assert "my-model" in model_ids
+    assert "other-preset" in model_ids
 
 
 async def test_list_models_capabilities(client: AsyncClient):
@@ -516,6 +552,23 @@ async def test_list_models_loaded_status(client: AsyncClient):
     data = resp.json()
     for m in data["data"]:
         assert "loaded" in m
+
+
+async def test_list_models_status_phases(client: AsyncClient):
+    """Gateway models surface per-model lifecycle status phases."""
+    resp = await client.get("/v1/models")
+    data = resp.json()
+    by_id = {m["id"]: m for m in data["data"]}
+    # llamacpp fixture has one loaded preset and one unloaded preset.
+    assert by_id["my-model"]["status"]["value"] == "loaded"
+    assert by_id["my-model"]["loaded"] is True
+    assert by_id["other-preset"]["status"]["value"] == "unloaded"
+    assert by_id["other-preset"]["loaded"] is False
+    # whisperx fixture has one loaded model and one sleeping one.
+    assert by_id["whisper-1"]["status"]["value"] == "loaded"
+    assert by_id["large-v3"]["status"]["value"] == "sleeping"
+    # ``loaded`` legacy flag is derived from status.value.
+    assert by_id["large-v3"]["loaded"] is False
 
 
 async def test_list_models_empty_when_no_models():
@@ -540,6 +593,141 @@ async def test_list_models_empty_when_no_models():
     assert resp.status_code == 200
     data = resp.json()
     assert data["data"] == []
+
+
+# ===================================================================
+# Models — load / unload
+# ===================================================================
+
+
+async def test_load_model_dispatches_to_llamacpp(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """POST /v1/models/load routes to the provider that owns the model."""
+    resp = await client.post(
+        "/v1/models/load", json={"model": "other-preset"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["model"] == "other-preset"
+    assert data["status"]["value"] == "loaded"
+
+    chat_client.load_model.assert_awaited_once_with("other-preset")
+
+
+async def test_load_model_dispatches_to_chatterbox(
+    client: AsyncClient,
+    chat_client: AsyncMock,
+    speech_client: AsyncMock,
+    transcription_client: AsyncMock,
+):
+    """chatterbox-owned models go to the chatterbox provider."""
+    resp = await client.post(
+        "/v1/models/load", json={"model": "chatterbox-turbo"},
+    )
+    assert resp.status_code == 200
+    speech_client.load_model.assert_awaited_once_with("chatterbox-turbo")
+    chat_client.load_model.assert_not_awaited()
+    transcription_client.load_model.assert_not_awaited()
+
+
+async def test_load_model_dispatches_to_whisperx(
+    client: AsyncClient,
+    chat_client: AsyncMock,
+    speech_client: AsyncMock,
+    transcription_client: AsyncMock,
+):
+    """whisperx-owned models go to the whisperx provider."""
+    resp = await client.post(
+        "/v1/models/load", json={"model": "large-v3"},
+    )
+    assert resp.status_code == 200
+    transcription_client.load_model.assert_awaited_once_with("large-v3")
+    chat_client.load_model.assert_not_awaited()
+    speech_client.load_model.assert_not_awaited()
+
+
+async def test_unload_model_dispatches_to_owner(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """POST /v1/models/unload routes to the provider that owns the model."""
+    resp = await client.post(
+        "/v1/models/unload", json={"model": "my-model"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["model"] == "my-model"
+    assert data["status"]["value"] == "unloaded"
+    chat_client.unload_model.assert_awaited_once_with("my-model")
+
+
+async def test_load_model_unknown(client: AsyncClient):
+    """Unknown model id returns 404."""
+    resp = await client.post(
+        "/v1/models/load", json={"model": "does-not-exist"},
+    )
+    assert resp.status_code == 404
+    assert "does-not-exist" in resp.json()["detail"]
+
+
+async def test_unload_model_unknown(client: AsyncClient):
+    """Unknown model id on unload returns 404."""
+    resp = await client.post(
+        "/v1/models/unload", json={"model": "does-not-exist"},
+    )
+    assert resp.status_code == 404
+
+
+async def test_load_model_backend_error(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Backend exceptions during load are mapped to 502."""
+    chat_client.load_model.side_effect = ConnectionError("down")
+    resp = await client.post(
+        "/v1/models/load", json={"model": "my-model"},
+    )
+    assert resp.status_code == 502
+
+
+async def test_load_model_backend_http_error(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """HTTPExceptions raised by providers pass through unchanged."""
+    from fastapi import HTTPException
+
+    chat_client.load_model.side_effect = HTTPException(
+        status_code=503, detail="busy",
+    )
+    resp = await client.post(
+        "/v1/models/load", json={"model": "my-model"},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"] == "busy"
+
+
+async def test_load_model_validation_error(client: AsyncClient):
+    """Missing model field returns 422 (FastAPI body validation)."""
+    resp = await client.post("/v1/models/load", json={})
+    assert resp.status_code == 422
+
+
+async def test_load_model_invalidates_cache(
+    client: AsyncClient, chat_client: AsyncMock, app,
+):
+    """After a successful load, the models cache is invalidated."""
+    # Seed with a fresh fetch.
+    await client.get("/v1/models")
+    before = app.state.models_fetched_at
+    assert before > 0
+
+    resp = await client.post(
+        "/v1/models/load", json={"model": "my-model"},
+    )
+    assert resp.status_code == 200
+    # Cache marker was reset to force a refresh on the next GET.
+    assert app.state.models_fetched_at == 0.0
 
 
 # ===================================================================
@@ -3197,3 +3385,145 @@ async def test_responses_reasoning_multiple_summaries(
     assert len(summaries) == 2
     assert summaries[0]["text"] == "First, I considered the input."
     assert summaries[1]["text"] == "Then, I evaluated options."
+
+
+# ===================================================================
+# LlamacppClient — router-mode /v1/models parsing
+# ===================================================================
+
+
+class _FakeResponse:
+    """Minimal httpx.Response-shaped object for LlamacppClient tests."""
+
+    def __init__(self, payload: dict, status_code: int = 200) -> None:
+        self._payload = payload
+        self.status_code = status_code
+        self.content = b"{}" if payload else b""
+        self.text = ""
+
+    def json(self) -> dict:
+        return self._payload
+
+
+async def test_llamacpp_fetch_models_router_mode():
+    """LlamacppClient parses router-mode `data[]` entries with status."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from gateway.providers.llamacpp import LlamacppClient
+
+    http = _AsyncMock()
+    http.get = _AsyncMock(return_value=_FakeResponse({
+        "object": "list",
+        "data": [
+            {
+                "id": "unsloth/gemma-4-E4B-it-GGUF:Q8_0",
+                "object": "model",
+                "created": 123,
+                "in_cache": True,
+                "status": {
+                    "value": "loaded",
+                    "args": ["llama-server", "-ctx", "16384"],
+                },
+            },
+            {
+                "id": "ggml-org/Qwen3-8B-GGUF:Q4_K_M",
+                "object": "model",
+                "created": 456,
+                "status": {"value": "unloaded"},
+            },
+            {
+                "id": "bad/failed",
+                "status": {
+                    "value": "unloaded",
+                    "failed": True,
+                    "exit_code": 1,
+                },
+            },
+        ],
+        "models": [
+            {
+                "model": "unsloth/gemma-4-E4B-it-GGUF:Q8_0",
+                "capabilities": ["completion", "multimodal"],
+            },
+        ],
+    }))
+
+    provider = LlamacppClient(
+        base_url="http://llamacpp:8000", http_client=http,
+    )
+    models = await provider.fetch_models()
+
+    assert len(models) == 3
+    by_id = {m.id: m for m in models}
+
+    gemma = by_id["unsloth/gemma-4-E4B-it-GGUF:Q8_0"]
+    assert gemma.owned_by == "llamacpp"
+    assert gemma.capabilities == ["completion", "multimodal"]
+    assert gemma.status is not None
+    assert gemma.status.value == "loaded"
+    assert gemma.status.args == ["llama-server", "-ctx", "16384"]
+    assert gemma.loaded is True
+
+    qwen = by_id["ggml-org/Qwen3-8B-GGUF:Q4_K_M"]
+    # Falls back to default capabilities when not in the ``models`` array.
+    assert qwen.capabilities == ["completion"]
+    assert qwen.status is not None
+    assert qwen.status.value == "unloaded"
+    assert qwen.loaded is False
+
+    bad = by_id["bad/failed"]
+    assert bad.status is not None
+    assert bad.status.value == "unloaded"
+    assert bad.status.failed is True
+    assert bad.status.exit_code == 1
+
+
+async def test_llamacpp_load_model_posts_to_router():
+    """LlamacppClient.load_model POSTs /models/load with the right body."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from gateway.providers.llamacpp import LlamacppClient
+
+    http = _AsyncMock()
+    http.post = _AsyncMock(return_value=_FakeResponse({
+        "success": True,
+        "status": {"value": "loaded"},
+    }))
+
+    provider = LlamacppClient(
+        base_url="http://llamacpp:8000", http_client=http,
+    )
+    result = await provider.load_model("my-preset")
+
+    http.post.assert_awaited_once()
+    args, kwargs = http.post.call_args
+    assert args[0] == "http://llamacpp:8000/models/load"
+    assert kwargs["json"] == {"model": "my-preset"}
+    assert result.success is True
+    assert result.model == "my-preset"
+    assert result.status is not None
+    assert result.status.value == "loaded"
+
+
+async def test_llamacpp_unload_model_posts_to_router():
+    """LlamacppClient.unload_model POSTs /models/unload."""
+    from unittest.mock import AsyncMock as _AsyncMock
+
+    from gateway.providers.llamacpp import LlamacppClient
+
+    http = _AsyncMock()
+    http.post = _AsyncMock(return_value=_FakeResponse({
+        "success": True,
+        "status": {"value": "unloaded"},
+    }))
+
+    provider = LlamacppClient(
+        base_url="http://llamacpp:8000", http_client=http,
+    )
+    result = await provider.unload_model("my-preset")
+
+    args, _ = http.post.call_args
+    assert args[0] == "http://llamacpp:8000/models/unload"
+    assert result.success is True
+    assert result.status is not None
+    assert result.status.value == "unloaded"

@@ -30,6 +30,16 @@ def mock_engine():
         eng.generate.return_value = (DUMMY_WAV, SAMPLE_RATE)
         eng.ensure_model.return_value = "chatterbox-turbo"
         eng.touch.return_value = None
+        eng.unload.return_value = None
+        # Status state machine used by the /models, /models/load,
+        # /models/unload and /health endpoints. The default is one
+        # model loaded, the rest unloaded.
+        eng.status_phase = "loaded"
+
+        def _status_for(name: str) -> str:
+            return "loaded" if eng.loaded_models.get(name) else "unloaded"
+
+        eng.status_for.side_effect = _status_for
         # Also patch the engine used in app.py (same singleton)
         with patch("chatterbox_service.app.engine", eng):
             yield eng
@@ -285,7 +295,13 @@ async def test_synthesize_unknown_model(client: AsyncClient, mock_engine: MagicM
 async def test_synthesize_missing_required_fields(client: AsyncClient):
     resp = await client.post("/synthesize", json={"model": "chatterbox-turbo"})
     assert resp.status_code == 400
-    assert "required" in resp.json()["detail"].lower()
+    detail = resp.json()["detail"]
+    # Pydantic validation returns a list of error dicts; the missing
+    # field errors should mention ``text`` and ``voice``.
+    assert isinstance(detail, list)
+    missing = {err["loc"][-1] for err in detail if err["type"] == "missing"}
+    assert "text" in missing
+    assert "voice" in missing
 
 
 async def test_synthesize_invalid_json(client: AsyncClient):
@@ -334,3 +350,170 @@ async def test_synthesize_default_params(client: AsyncClient, mock_engine: Magic
     assert call_kwargs["cfg_weight"] == 0.5
     assert call_kwargs["seed"] is None
     assert call_kwargs["language"] is None
+
+
+# ===================================================================
+# /models status
+# ===================================================================
+
+
+async def test_list_models_includes_status(client: AsyncClient):
+    """Each /models entry includes a per-model lifecycle status object."""
+    resp = await client.get("/models")
+    data = resp.json()
+    by_id = {m["id"]: m for m in data["data"]}
+    assert "status" in by_id["chatterbox-turbo"]
+    assert by_id["chatterbox-turbo"]["status"]["value"] == "loaded"
+    assert by_id["chatterbox"]["status"]["value"] == "unloaded"
+    assert by_id["chatterbox-multilingual"]["status"]["value"] == "unloaded"
+
+
+# ===================================================================
+# /models/load and /models/unload
+# ===================================================================
+
+
+async def test_load_model_success(client: AsyncClient, mock_engine: MagicMock):
+    """POST /models/load invokes engine.ensure_model and returns status."""
+    mock_engine.ensure_model.return_value = "chatterbox"
+    resp = await client.post(
+        "/models/load", json={"model": "chatterbox"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["model"] == "chatterbox"
+    assert "status" in data
+    mock_engine.ensure_model.assert_called_once_with("chatterbox")
+
+
+async def test_load_model_unknown_returns_400(
+    client: AsyncClient, mock_engine: MagicMock,
+):
+    """Unknown model id returns 400 via engine.ensure_model ValueError."""
+    mock_engine.ensure_model.side_effect = ValueError("Unknown model 'nope'")
+    resp = await client.post("/models/load", json={"model": "nope"})
+    assert resp.status_code == 400
+
+
+async def test_load_model_engine_failure_returns_500(
+    client: AsyncClient, mock_engine: MagicMock,
+):
+    """Engine load failure returns 500."""
+    mock_engine.ensure_model.side_effect = RuntimeError("OOM")
+    resp = await client.post(
+        "/models/load", json={"model": "chatterbox"},
+    )
+    assert resp.status_code == 500
+
+
+async def test_load_model_missing_model_field(client: AsyncClient):
+    """Missing model field returns 400 via pydantic validation."""
+    resp = await client.post("/models/load", json={})
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(e["type"] == "missing" for e in detail)
+
+
+async def test_load_model_extra_field_rejected(client: AsyncClient):
+    """extra='forbid' on the schema rejects unknown fields."""
+    resp = await client.post(
+        "/models/load", json={"model": "chatterbox-turbo", "junk": 1},
+    )
+    assert resp.status_code == 400
+
+
+async def test_load_model_invalid_json(client: AsyncClient):
+    """Non-JSON body returns 400."""
+    resp = await client.post(
+        "/models/load",
+        content=b"not json",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 400
+
+
+async def test_unload_model_success(client: AsyncClient, mock_engine: MagicMock):
+    """POST /models/unload invokes engine.unload(model)."""
+    resp = await client.post(
+        "/models/unload", json={"model": "chatterbox-turbo"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["model"] == "chatterbox-turbo"
+    mock_engine.unload.assert_called_once_with("chatterbox-turbo")
+
+
+async def test_unload_model_unknown_returns_404(
+    client: AsyncClient, mock_engine: MagicMock,
+):
+    """Unknown model id returns 404 without touching the engine."""
+    resp = await client.post(
+        "/models/unload", json={"model": "not-a-model"},
+    )
+    assert resp.status_code == 404
+    mock_engine.unload.assert_not_called()
+
+
+# ===================================================================
+# Engine state machine (without real weights)
+# ===================================================================
+
+
+def test_engine_status_transitions():
+    """ChatterboxEngine transitions unloaded→loaded→unloaded/sleeping.
+
+    We drive the state machine directly (no real weights). A fake
+    ``_models`` dict is pushed into the singleton to simulate a
+    successful load without touching the chatterbox library.
+    """
+    from chatterbox_service.engine import ChatterboxEngine
+
+    engine = ChatterboxEngine()
+    assert engine.status_phase == "unloaded"
+    assert engine.status_for("chatterbox-turbo") == "unloaded"
+
+    # Simulate a successful load.
+    engine.mark_loading()
+    assert engine.status_phase == "loading"
+    engine._last_loaded_name = "chatterbox-turbo"
+    assert engine.status_for("chatterbox-turbo") == "loading"
+
+    engine._models["chatterbox-turbo"] = object()
+    engine._sample_rates["chatterbox-turbo"] = 24000
+    engine.mark_loaded()
+    engine.touch()
+    assert engine.status_phase == "loaded"
+    assert engine.status_for("chatterbox-turbo") == "loaded"
+    # Other known models stay unloaded.
+    assert engine.status_for("chatterbox") == "unloaded"
+
+    # Auto-unload via the idle checker transitions to sleeping.
+    engine.unload()
+    engine.mark_sleeping()
+    assert engine.status_phase == "sleeping"
+    assert engine.status_for("chatterbox-turbo") == "sleeping"
+    # Other models are still just "unloaded" — sleeping is per-model.
+    assert engine.status_for("chatterbox") == "unloaded"
+
+
+def test_engine_load_evicts_previous_model():
+    """Loading a second model unloads the first (models-max=1 invariant)."""
+    from chatterbox_service.engine import ChatterboxEngine
+
+    engine = ChatterboxEngine()
+    # Pretend "chatterbox-turbo" is already loaded.
+    engine._models["chatterbox-turbo"] = object()
+    engine._sample_rates["chatterbox-turbo"] = 24000
+    engine.mark_loaded()
+    engine._last_loaded_name = "chatterbox-turbo"
+
+    # Simulate the pre-load eviction path (without actually loading
+    # new weights — just call unload explicitly, which is what
+    # ``load`` does internally).
+    assert engine.is_loaded
+    engine.unload()
+    assert not engine.is_loaded
+    assert "chatterbox-turbo" not in engine._models

@@ -8,7 +8,13 @@ from typing import TYPE_CHECKING, ClassVar
 
 from fastapi import HTTPException
 
-from gateway.models import RawSegment, TranscriptionResult, WordTimestamp
+from gateway.models import (
+    LoadModelResponse,
+    RawSegment,
+    TranscriptionResult,
+    UnloadModelResponse,
+    WordTimestamp,
+)
 from gateway.models.audio import (
     TranscriptionCompletedEvent,
     TranscriptionCreatedEvent,
@@ -16,8 +22,12 @@ from gateway.models.audio import (
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
 )
-from gateway.providers.base import BaseProvider
-from gateway.providers.protocols import AudioTranscriptions, AudioTranslations
+from gateway.providers.base import BaseProvider, status_from_payload
+from gateway.providers.protocols import (
+    AudioTranscriptions,
+    AudioTranslations,
+    ModelManagement,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -25,11 +35,40 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class WhisperxClient(BaseProvider, AudioTranscriptions, AudioTranslations):
+class WhisperxClient(
+    BaseProvider, AudioTranscriptions, AudioTranslations, ModelManagement,
+):
     name = "whisperx"
     url_env = "WHISPERX_URL"
     default_url = "http://whisperx:8000"
     default_model_capabilities: ClassVar[list[str]] = ["transcription"]
+
+    # -- ModelManagement ------------------------------------------------------
+
+    async def load_model(self, model: str) -> LoadModelResponse:
+        payload = await self._post_model_action("/models/load", model)
+        return LoadModelResponse(
+            success=bool(payload.get("success", True)),
+            model=str(payload.get("model", model)),
+            status=status_from_payload(payload.get("status")),
+        )
+
+    async def unload_model(self, model: str) -> UnloadModelResponse:
+        payload = await self._post_model_action("/models/unload", model)
+        return UnloadModelResponse(
+            success=bool(payload.get("success", True)),
+            model=str(payload.get("model", model)),
+            status=status_from_payload(payload.get("status")),
+        )
+
+    async def _post_model_action(self, path: str, model: str) -> dict:
+        resp = await self._http_client.post(
+            f"{self._base_url}{path}", json={"model": model},
+        )
+        if resp.status_code != 200:
+            detail = resp.text or f"Backend returned HTTP {resp.status_code}"
+            raise HTTPException(status_code=resp.status_code, detail=detail)
+        return resp.json() if resp.content else {}
 
     async def transcribe(
         self,

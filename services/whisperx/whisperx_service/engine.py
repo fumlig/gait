@@ -30,6 +30,10 @@ class WhisperXEngine(IdleMixin):
     def __init__(self) -> None:
         self._model: Any = None
         self._model_name: str | None = None
+        # The most recently loaded model name (persists across unload
+        # so we can report ``sleeping`` against the specific model that
+        # was auto-unloaded by the idle checker).
+        self._last_loaded_name: str | None = None
         self._align_models: dict[str, tuple[Any, Any]] = {}
         self._diarize_pipeline: Any = None
 
@@ -40,17 +44,27 @@ class WhisperXEngine(IdleMixin):
         if not name:
             logger.info("No model name specified, skipping load.")
             return
+        resolved = self._resolve_model_name(name)
 
         logger.info(
             "Loading WhisperX model=%s device=%s compute_type=%s ...",
-            name, settings.device, settings.compute_type,
+            resolved, settings.device, settings.compute_type,
         )
-        self._model = whisperx.load_model(
-            name, device=settings.device, compute_type=settings.compute_type,
-        )
-        self._model_name = name
+        self._last_loaded_name = resolved
+        self.mark_loading()
+        try:
+            self._model = whisperx.load_model(
+                resolved,
+                device=settings.device,
+                compute_type=settings.compute_type,
+            )
+        except Exception:
+            self.mark_unloaded()
+            raise
+        self._model_name = resolved
+        self.mark_loaded()
         self.touch()
-        logger.info("WhisperX model loaded: %s", name)
+        logger.info("WhisperX model loaded: %s", resolved)
 
     def unload(self) -> None:
         self._model = None
@@ -59,19 +73,26 @@ class WhisperXEngine(IdleMixin):
         self._diarize_pipeline = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        # Manual unload — transition to ``unloaded`` (not ``sleeping``).
+        # The idle checker calls ``mark_sleeping`` instead after this.
+        self.mark_unloaded()
         logger.info("All models unloaded.")
 
-    def ensure_model(self, model_name: str) -> None:
-        """Ensure the requested model is loaded, swapping if necessary."""
+    def ensure_model(self, model_name: str) -> str:
+        """Ensure the requested model is loaded, swapping if necessary.
+
+        Returns the resolved (canonical) model name.
+        """
         resolved = self._resolve_model_name(model_name)
         if self._model_name == resolved and self._model is not None:
-            return
+            return resolved
         logger.info("Swapping model: %s -> %s", self._model_name, resolved)
         self._model = None
         self._model_name = None
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         self.load(resolved)
+        return resolved
 
     @property
     def is_loaded(self) -> bool:
@@ -80,6 +101,26 @@ class WhisperXEngine(IdleMixin):
     @property
     def loaded_model_name(self) -> str | None:
         return self._model_name
+
+    def status_for(self, model_name: str) -> str:
+        """Return the status phase for a specific model id.
+
+        Only one model is resident at a time. The currently-loaded
+        model reports ``loaded`` (or ``loading`` mid-load); the most
+        recently loaded model reports ``sleeping`` when the engine
+        has been auto-unloaded by the idle checker; everything else
+        reports ``unloaded``.  ``whisper-1`` is an alias that tracks
+        whichever concrete model is currently loaded.
+        """
+        resolved = self._resolve_model_name(model_name)
+        phase = self.status_phase
+        if phase == "loading" and resolved == self._last_loaded_name:
+            return "loading"
+        if resolved == self._model_name and self._model is not None:
+            return "loaded"
+        if phase == "sleeping" and resolved == self._last_loaded_name:
+            return "sleeping"
+        return "unloaded"
 
     def _resolve_model_name(self, name: str) -> str:
         if name == "whisper-1":

@@ -3,7 +3,7 @@
 # Run from the repo root: ./scripts/check-idle-sync.sh
 set -euo pipefail
 
-files=(services/*/src/*/idle.py)
+files=(services/*/*_service/idle.py)
 
 if [[ ${#files[@]} -lt 2 ]]; then
     echo "SKIP: fewer than 2 idle.py files found"

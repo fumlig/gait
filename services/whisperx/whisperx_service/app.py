@@ -1,11 +1,13 @@
 """WhisperX STT service (Starlette).
 
 Endpoints:
-    POST /transcribe         - multipart (file + params) -> JSON segments
-    POST /transcribe_stream  - multipart (file + params) -> SSE segments
-    POST /translate          - multipart (file + params) -> JSON segments
-    GET  /models             - available models with loaded status
-    GET  /health             - liveness / readiness
+    POST /transcribe          - multipart (file + params) -> JSON segments
+    POST /transcribe_stream   - multipart (file + params) -> SSE segments
+    POST /translate           - multipart (file + params) -> JSON segments
+    GET  /models              - available models with per-model status
+    POST /models/load         - load a model (unloads any previous one)
+    POST /models/unload       - unload the current model
+    GET  /health              - liveness / readiness
 """
 
 from __future__ import annotations
@@ -14,9 +16,11 @@ import json
 import logging
 import os
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from pydantic import BaseModel, ValidationError
 from starlette.applications import Starlette
+from starlette.datastructures import UploadFile
 from starlette.requests import Request  # noqa: TC002 — Starlette handler signature
 from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
@@ -24,6 +28,18 @@ from starlette.routing import Route
 from whisperx_service.config import settings
 from whisperx_service.engine import engine
 from whisperx_service.idle import idle_checker
+from whisperx_service.schemas import (
+    HealthResponse,
+    LoadModelRequest,
+    LoadModelResponse,
+    ModelInfo,
+    ModelListResponse,
+    ModelStatus,
+    TranscribeFormRequest,
+    TranscribeStreamFormRequest,
+    UnloadModelRequest,
+    UnloadModelResponse,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -35,27 +51,108 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _validation_error(exc: ValidationError) -> JSONResponse:
+    return JSONResponse(
+        {"detail": exc.errors(include_url=False, include_context=False)},
+        status_code=400,
+    )
+
+
+def _parse_form(
+    form_mapping: dict[str, Any], model_cls: type[BaseModel],
+) -> tuple[BaseModel | None, JSONResponse | None]:
+    """Validate a form-field dict against *model_cls*.
+
+    Returns ``(parsed_model, None)`` on success or
+    ``(None, error_response)`` on validation failure.
+    """
+    try:
+        parsed = model_cls.model_validate(form_mapping)
+    except ValidationError as exc:
+        return None, _validation_error(exc)
+    return parsed, None
+
+
+async def _parse_json_body(
+    request: Request, model_cls: type[BaseModel],
+) -> tuple[BaseModel | None, JSONResponse | None]:
+    """Validate a JSON body against *model_cls*."""
+    try:
+        raw = await request.json()
+    except json.JSONDecodeError:
+        return None, JSONResponse(
+            {"detail": "Invalid JSON body."}, status_code=400,
+        )
+    try:
+        parsed = model_cls.model_validate(raw)
+    except ValidationError as exc:
+        return None, _validation_error(exc)
+    return parsed, None
+
+
+def _form_field_mapping(form) -> dict[str, Any]:
+    """Convert a Starlette ``FormData`` into a plain dict for pydantic.
+
+    Upload files are dropped; only scalar text fields are kept.
+    """
+    out: dict[str, Any] = {}
+    for key in form.keys():  # noqa: SIM118 — Starlette form exposes .keys()
+        value = form.get(key)
+        if isinstance(value, UploadFile):
+            continue
+        if value is None or value == "":
+            continue
+        out[key] = value
+    return out
+
+
+def _model_status(model_name: str) -> ModelStatus:
+    return ModelStatus(value=engine.status_for(model_name))  # ty: ignore[invalid-argument-type]
+
+
+def _build_model_list() -> ModelListResponse:
+    entries = [
+        ModelInfo(
+            id=model_id,
+            capabilities=["transcription", "translation"],
+            status=_model_status(model_id),
+            loaded=engine.status_for(model_id) == "loaded",
+        )
+        for model_id in engine.list_available_models()
+    ]
+    return ModelListResponse(data=entries)
+
+
+# ---------------------------------------------------------------------------
+# Transcribe / translate
+# ---------------------------------------------------------------------------
+
+
 async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
     """Shared handler for transcription and translation."""
     form = await request.form()
 
-    upload = form.get("file")
-    model = str(form.get("model", ""))
-
-    if not model:
-        return JSONResponse({"detail": "'model' is required."}, status_code=400)
+    parsed, err = _parse_form(_form_field_mapping(form), TranscribeFormRequest)
+    if err is not None:
+        return err
+    assert isinstance(parsed, TranscribeFormRequest)
+    body = parsed
 
     try:
-        engine.ensure_model(model)
+        engine.ensure_model(body.model)
     except Exception as exc:
-        logger.exception("Failed to load model '%s'", model)
+        logger.exception("Failed to load model '%s'", body.model)
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
     if not engine.is_loaded:
         return JSONResponse({"detail": "Model is not loaded yet."}, status_code=503)
 
-    from starlette.datastructures import UploadFile
-
+    upload = form.get("file")
     if not isinstance(upload, UploadFile):
         return JSONResponse({"detail": "No audio file uploaded."}, status_code=400)
 
@@ -69,26 +166,22 @@ async def _do_transcribe(request: Request, *, task: str) -> JSONResponse:
             status_code=400,
         )
 
-    language = str(form.get("language", "")) or None
-    prompt = str(form.get("prompt", "")) or None
-    temperature = float(str(form.get("temperature", "0.0")))
-    want_words = str(form.get("word_timestamps", "false")).lower() == "true"
-
     # Diarization: per-request opt-in, requires server config and HF_TOKEN
     want_diarize = (
-        str(form.get("diarize", "false")).lower() == "true"
+        body.diarize
         and settings.enable_diarization
         and bool(os.getenv("HF_TOKEN"))
     )
+    want_words = body.word_timestamps
     if want_diarize:
         want_words = True  # diarization needs word alignment
 
     try:
         result = engine.transcribe(
             audio_data,
-            language=language if task == "transcribe" else None,
-            prompt=prompt,
-            temperature=temperature,
+            language=body.language if task == "transcribe" else None,
+            prompt=body.prompt,
+            temperature=body.temperature,
             task=task,
             word_timestamps=want_words,
             diarize=want_diarize,
@@ -109,23 +202,24 @@ async def transcribe_stream(request: Request) -> StreamingResponse | JSONRespons
     """POST /transcribe_stream — yield segments as SSE while the model runs."""
     form = await request.form()
 
-    upload = form.get("file")
-    model = str(form.get("model", ""))
-
-    if not model:
-        return JSONResponse({"detail": "'model' is required."}, status_code=400)
+    parsed, err = _parse_form(
+        _form_field_mapping(form), TranscribeStreamFormRequest,
+    )
+    if err is not None:
+        return err
+    assert isinstance(parsed, TranscribeStreamFormRequest)
+    body = parsed
 
     try:
-        engine.ensure_model(model)
+        engine.ensure_model(body.model)
     except Exception as exc:
-        logger.exception("Failed to load model '%s'", model)
+        logger.exception("Failed to load model '%s'", body.model)
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
     if not engine.is_loaded:
         return JSONResponse({"detail": "Model is not loaded yet."}, status_code=503)
 
-    from starlette.datastructures import UploadFile
-
+    upload = form.get("file")
     if not isinstance(upload, UploadFile):
         return JSONResponse({"detail": "No audio file uploaded."}, status_code=400)
 
@@ -139,17 +233,13 @@ async def transcribe_stream(request: Request) -> StreamingResponse | JSONRespons
             status_code=400,
         )
 
-    language = str(form.get("language", "")) or None
-    prompt = str(form.get("prompt", "")) or None
-    temperature = float(str(form.get("temperature", "0.0")))
-
     def generate():
         """Sync generator — Starlette runs each next() in a thread."""
         for item in engine.transcribe_stream(
             audio_data,
-            language=language,
-            prompt=prompt,
-            temperature=temperature,
+            language=body.language,
+            prompt=body.prompt,
+            temperature=body.temperature,
             task="transcribe",
         ):
             yield f"data: {json.dumps(item)}\n\n"
@@ -165,30 +255,77 @@ async def translate(request: Request) -> JSONResponse:
     return await _do_transcribe(request, task="translate")
 
 
+# ---------------------------------------------------------------------------
+# Model management
+# ---------------------------------------------------------------------------
+
+
 async def list_models(request: Request) -> JSONResponse:
-    loaded_name = engine.loaded_model_name
-    models = [
-        {
-            "id": model_id,
-            "object": "model",
-            "owned_by": "whisperx",
-            "capabilities": ["transcription", "translation"],
-            "loaded": model_id == loaded_name
-            or (model_id == "whisper-1" and loaded_name is not None),
-        }
-        for model_id in engine.list_available_models()
-    ]
-    return JSONResponse({"object": "list", "data": models})
+    return JSONResponse(_build_model_list().model_dump())
+
+
+async def load_model(request: Request) -> JSONResponse:
+    parsed, err = await _parse_json_body(request, LoadModelRequest)
+    if err is not None:
+        return err
+    assert isinstance(parsed, LoadModelRequest)
+
+    try:
+        resolved = engine.ensure_model(parsed.model)
+    except Exception:
+        logger.exception("Failed to load model '%s'", parsed.model)
+        return JSONResponse(
+            {"detail": f"Failed to load model '{parsed.model}'."},
+            status_code=500,
+        )
+
+    response = LoadModelResponse(
+        success=True,
+        model=resolved,
+        status=_model_status(resolved),
+    )
+    return JSONResponse(response.model_dump())
+
+
+async def unload_model(request: Request) -> JSONResponse:
+    parsed, err = await _parse_json_body(request, UnloadModelRequest)
+    if err is not None:
+        return err
+    assert isinstance(parsed, UnloadModelRequest)
+
+    # WhisperX keeps exactly one model resident at a time; any
+    # ``model`` that matches the currently-loaded one (or is
+    # ``whisper-1``) unloads it. Anything else is a no-op but still
+    # succeeds, so the gateway's idempotent semantics hold.
+    try:
+        engine.unload()
+    except Exception:
+        logger.exception("Failed to unload model '%s'", parsed.model)
+        return JSONResponse(
+            {"detail": f"Failed to unload model '{parsed.model}'."},
+            status_code=500,
+        )
+
+    response = UnloadModelResponse(
+        success=True,
+        model=parsed.model,
+        status=_model_status(parsed.model),
+    )
+    return JSONResponse(response.model_dump())
+
+
+# ---------------------------------------------------------------------------
+# Health + lifespan
+# ---------------------------------------------------------------------------
 
 
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse(
-        {
-            "status": "ok",
-            "model_loaded": engine.is_loaded,
-            "loaded_model": engine.loaded_model_name,
-        }
+    body = HealthResponse(
+        model_loaded=engine.is_loaded,
+        loaded_model=engine.loaded_model_name,
+        phase=engine.status_phase,
     )
+    return JSONResponse(body.model_dump())
 
 
 @asynccontextmanager
@@ -211,6 +348,8 @@ app = Starlette(
         Route("/transcribe_stream", transcribe_stream, methods=["POST"]),
         Route("/translate", translate, methods=["POST"]),
         Route("/models", list_models, methods=["GET"]),
+        Route("/models/load", load_model, methods=["POST"]),
+        Route("/models/unload", unload_model, methods=["POST"]),
         Route("/health", health, methods=["GET"]),
     ],
     lifespan=lifespan,

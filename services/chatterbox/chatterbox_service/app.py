@@ -1,9 +1,11 @@
 """Chatterbox TTS service (Starlette).
 
 Endpoints:
-    POST /synthesize  - JSON body -> audio/wav
-    GET  /models      - available models with loaded status
-    GET  /health      - liveness / readiness
+    POST /synthesize      - JSON body -> audio/wav
+    GET  /models          - available models with per-model status
+    POST /models/load     - load a model (unloads any previous one)
+    POST /models/unload   - unload a specific model (or all)
+    GET  /health          - liveness / readiness
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from typing import TYPE_CHECKING
 
 import torch  # noqa: TC002 — used at runtime in _wav_to_bytes
 import torchaudio
+from pydantic import BaseModel, ValidationError
 from starlette.applications import Starlette
 from starlette.requests import Request  # noqa: TC002 — Starlette handler signature
 from starlette.responses import JSONResponse, Response
@@ -28,6 +31,17 @@ from chatterbox_service.engine import (
     validate_language,
 )
 from chatterbox_service.idle import idle_checker
+from chatterbox_service.schemas import (
+    HealthResponse,
+    LoadModelRequest,
+    LoadModelResponse,
+    ModelInfo,
+    ModelListResponse,
+    ModelStatus,
+    SynthesizeRequest,
+    UnloadModelRequest,
+    UnloadModelResponse,
+)
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -39,18 +53,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def _build_model_list() -> list[dict[str, object]]:
-    loaded = engine.loaded_models
-    return [
-        {
-            "id": name,
-            "object": "model",
-            "owned_by": "resemble-ai",
-            "capabilities": ["speech"],
-            "loaded": loaded.get(name, False),
-        }
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_model_list() -> ModelListResponse:
+    entries = [
+        ModelInfo(
+            id=name,
+            owned_by="resemble-ai",
+            capabilities=["speech"],
+            status=ModelStatus(value=engine.status_for(name)),  # ty: ignore[invalid-argument-type]
+            loaded=engine.loaded_models.get(name, False),
+        )
         for name in sorted(KNOWN_MODELS)
     ]
+    return ModelListResponse(data=entries)
+
+
+def _model_status_response(model_name: str) -> ModelStatus:
+    return ModelStatus(value=engine.status_for(model_name))  # ty: ignore[invalid-argument-type]
 
 
 def _wav_to_bytes(wav: torch.Tensor, sample_rate: int) -> bytes:
@@ -59,62 +82,70 @@ def _wav_to_bytes(wav: torch.Tensor, sample_rate: int) -> bytes:
     return buf.getvalue()
 
 
-async def synthesize(request: Request) -> Response:
+def _validation_error(exc: ValidationError) -> JSONResponse:
+    return JSONResponse(
+        {"detail": exc.errors(include_url=False, include_context=False)},
+        status_code=400,
+    )
+
+
+async def _parse_json_body(
+    request: Request, model_cls: type[BaseModel],
+) -> tuple[BaseModel | None, JSONResponse | None]:
+    """Return (parsed_model, None) on success or (None, error_response)."""
     try:
-        body = await request.json()
+        raw = await request.json()
     except json.JSONDecodeError:
-        return JSONResponse({"detail": "Invalid JSON body."}, status_code=400)
-
-    text = body.get("text")
-    voice = body.get("voice")
-    model = body.get("model")
-    if not text or not voice or not model:
-        return JSONResponse(
-            {"detail": "'text', 'voice', and 'model' are required fields."},
-            status_code=400,
+        return None, JSONResponse(
+            {"detail": "Invalid JSON body."}, status_code=400,
         )
+    try:
+        parsed = model_cls.model_validate(raw)
+    except ValidationError as exc:
+        return None, _validation_error(exc)
+    return parsed, None
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+
+
+async def synthesize(request: Request) -> Response:
+    parsed, err = await _parse_json_body(request, SynthesizeRequest)
+    if err is not None:
+        return err
+    assert isinstance(parsed, SynthesizeRequest)
+    body = parsed
 
     try:
-        model_name = engine.ensure_model(model)
+        model_name = engine.ensure_model(body.model)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
-    language = body.get("language")
     try:
-        validate_language(model_name, language)
+        validate_language(model_name, body.language)
     except ValueError as exc:
         return JSONResponse({"detail": str(exc)}, status_code=400)
 
     if not engine.is_loaded:
         return JSONResponse({"detail": "No model is loaded yet."}, status_code=503)
 
-    speed = float(body.get("speed", 1.0))
-    exaggeration = float(body.get("exaggeration", 0.5))
-    cfg_weight = float(body.get("cfg_weight", 0.5))
-    temperature = float(body.get("temperature", 0.8))
-    repetition_penalty = float(body.get("repetition_penalty", 1.2))
-    top_p = float(body.get("top_p", 1.0))
-    min_p = float(body.get("min_p", 0.05))
-    top_k = int(body.get("top_k", 1000))
-    seed = body.get("seed")
-    if seed is not None:
-        seed = int(seed)
-
     try:
         wav, sr = engine.generate(
-            text=text,
+            text=body.text,
             model_name=model_name,
-            voice=voice,
-            speed=speed,
-            language=language,
-            exaggeration=exaggeration,
-            cfg_weight=cfg_weight,
-            temperature=temperature,
-            repetition_penalty=repetition_penalty,
-            top_p=top_p,
-            min_p=min_p,
-            top_k=top_k,
-            seed=seed,
+            voice=body.voice,
+            speed=body.speed,
+            language=body.language,
+            exaggeration=body.exaggeration,
+            cfg_weight=body.cfg_weight,
+            temperature=body.temperature,
+            repetition_penalty=body.repetition_penalty,
+            top_p=body.top_p,
+            min_p=body.min_p,
+            top_k=body.top_k,
+            seed=body.seed,
         )
     except Exception:
         logger.exception("Speech generation failed")
@@ -132,17 +163,70 @@ async def synthesize(request: Request) -> Response:
 
 
 async def list_models(request: Request) -> JSONResponse:
-    return JSONResponse({"object": "list", "data": _build_model_list()})
+    return JSONResponse(_build_model_list().model_dump())
+
+
+async def load_model(request: Request) -> JSONResponse:
+    parsed, err = await _parse_json_body(request, LoadModelRequest)
+    if err is not None:
+        return err
+    assert isinstance(parsed, LoadModelRequest)
+
+    try:
+        resolved = engine.ensure_model(parsed.model)
+    except ValueError as exc:
+        return JSONResponse({"detail": str(exc)}, status_code=400)
+    except Exception:
+        logger.exception("Failed to load model '%s'", parsed.model)
+        return JSONResponse(
+            {"detail": f"Failed to load model '{parsed.model}'."},
+            status_code=500,
+        )
+
+    response = LoadModelResponse(
+        success=True,
+        model=resolved,
+        status=_model_status_response(resolved),
+    )
+    return JSONResponse(response.model_dump())
+
+
+async def unload_model(request: Request) -> JSONResponse:
+    parsed, err = await _parse_json_body(request, UnloadModelRequest)
+    if err is not None:
+        return err
+    assert isinstance(parsed, UnloadModelRequest)
+
+    model_name = parsed.model
+    if model_name not in KNOWN_MODELS:
+        return JSONResponse(
+            {"detail": f"Unknown model '{model_name}'."}, status_code=404,
+        )
+
+    try:
+        engine.unload(model_name)
+    except Exception:
+        logger.exception("Failed to unload model '%s'", model_name)
+        return JSONResponse(
+            {"detail": f"Failed to unload model '{model_name}'."},
+            status_code=500,
+        )
+
+    response = UnloadModelResponse(
+        success=True,
+        model=model_name,
+        status=_model_status_response(model_name),
+    )
+    return JSONResponse(response.model_dump())
 
 
 async def health(request: Request) -> JSONResponse:
-    return JSONResponse(
-        {
-            "status": "ok",
-            "model_loaded": engine.is_loaded,
-            "models": engine.loaded_models,
-        }
+    body = HealthResponse(
+        model_loaded=engine.is_loaded,
+        models=engine.loaded_models,
+        phase=engine.status_phase,
     )
+    return JSONResponse(body.model_dump())
 
 
 @asynccontextmanager
@@ -163,6 +247,8 @@ app = Starlette(
     routes=[
         Route("/synthesize", synthesize, methods=["POST"]),
         Route("/models", list_models, methods=["GET"]),
+        Route("/models/load", load_model, methods=["POST"]),
+        Route("/models/unload", unload_model, methods=["POST"]),
         Route("/health", health, methods=["GET"]),
     ],
     lifespan=lifespan,

@@ -23,8 +23,10 @@ if TYPE_CHECKING:
         CreateResponseResponse,
         EmbeddingRequest,
         EmbeddingResponse,
+        LoadModelResponse,
         SpeechRequest,
         TranscriptionResult,
+        UnloadModelResponse,
         Voice,
     )
     from gateway.models.audio import TranscriptionStreamEvent
@@ -124,6 +126,22 @@ class AudioVoices(Protocol):
     async def get_voice(self, name: str) -> Voice: ...
     async def create_voice(self, name: str, audio_data: bytes) -> Voice: ...
     async def delete_voice(self, name: str) -> dict[str, Any]: ...
+
+
+@runtime_checkable
+class ModelManagement(Protocol):
+    """Optional capability: explicit load/unload of models.
+
+    Providers that implement this protocol can be targeted by
+    ``POST /v1/models/load`` and ``POST /v1/models/unload``. The
+    gateway routes each request to the provider that owns the
+    requested model (looked up from the cached ``/v1/models`` list),
+    so this protocol is *not* part of ``PROTOCOL_SLOTS`` — the
+    dispatch is per-model, not per-slot.
+    """
+
+    async def load_model(self, model: str) -> LoadModelResponse: ...
+    async def unload_model(self, model: str) -> UnloadModelResponse: ...
 
 
 PROTOCOL_SLOTS: list[tuple[type, str]] = [

@@ -8,8 +8,9 @@ from typing import TYPE_CHECKING, ClassVar
 from fastapi import HTTPException
 from starlette.responses import StreamingResponse
 
-from gateway.providers.base import BaseProvider
-from gateway.providers.protocols import AudioSpeech
+from gateway.models import LoadModelResponse, UnloadModelResponse
+from gateway.providers.base import BaseProvider, status_from_payload
+from gateway.providers.protocols import AudioSpeech, ModelManagement
 
 if TYPE_CHECKING:
     from gateway.models import SpeechRequest
@@ -17,11 +18,38 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-class ChatterboxClient(BaseProvider, AudioSpeech):
+class ChatterboxClient(BaseProvider, AudioSpeech, ModelManagement):
     name = "chatterbox"
     url_env = "CHATTERBOX_URL"
     default_url = "http://chatterbox:8000"
     default_model_capabilities: ClassVar[list[str]] = ["speech"]
+
+    # -- ModelManagement ------------------------------------------------------
+
+    async def load_model(self, model: str) -> LoadModelResponse:
+        payload = await self._post_model_action("/models/load", model)
+        return LoadModelResponse(
+            success=bool(payload.get("success", True)),
+            model=str(payload.get("model", model)),
+            status=status_from_payload(payload.get("status")),
+        )
+
+    async def unload_model(self, model: str) -> UnloadModelResponse:
+        payload = await self._post_model_action("/models/unload", model)
+        return UnloadModelResponse(
+            success=bool(payload.get("success", True)),
+            model=str(payload.get("model", model)),
+            status=status_from_payload(payload.get("status")),
+        )
+
+    async def _post_model_action(self, path: str, model: str) -> dict:
+        resp = await self._http_client.post(
+            f"{self._base_url}{path}", json={"model": model},
+        )
+        if resp.status_code != 200:
+            detail = resp.text or f"Backend returned HTTP {resp.status_code}"
+            raise HTTPException(status_code=resp.status_code, detail=detail)
+        return resp.json() if resp.content else {}
 
     def _build_payload(self, request: SpeechRequest) -> dict:
         """Build the backend JSON payload from an OpenAI SpeechRequest."""

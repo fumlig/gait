@@ -19,10 +19,14 @@ A FastAPI gateway handles all OpenAI protocol concerns — request validation, r
 | `POST` | `/v1/audio/voices` | Create voice (multipart: name + WAV file) |
 | `GET`  | `/v1/audio/voices/{name}` | Get voice |
 | `DELETE` | `/v1/audio/voices/{name}` | Delete voice |
-| `GET` | `/v1/models` | Merged model list from all backends (auto-refreshing) |
+| `GET` | `/v1/models` | Merged model list from all backends (auto-refreshing; includes per-model lifecycle `status`) |
+| `POST` | `/v1/models/load` | Load a model on its owning provider (`{"model": "<id>"}`) |
+| `POST` | `/v1/models/unload` | Unload a model on its owning provider (`{"model": "<id>"}`) |
 | `GET` | `/health` | Gateway + per-backend health status |
 
-LLM endpoints are proxied transparently to llama.cpp. Audio endpoints convert between OpenAI API formats and backend RPC formats.
+LLM endpoints are proxied transparently to llama.cpp, which runs in **router mode** so that API callers can switch between named model presets per request (see [config/llama-models.ini](config/llama-models.ini) and the [llamacpp README](services/llamacpp/README.md)). Audio endpoints convert between OpenAI API formats and backend RPC formats.
+
+`GET /v1/models` surfaces a per-model lifecycle `status` (`unloaded` / `loading` / `loaded` / `sleeping`) mirroring llama-server's router-mode shape. `POST /v1/models/load` and `POST /v1/models/unload` are gait extensions that dispatch to whichever provider owns the requested model — all three current providers (llamacpp, chatterbox, whisperx) implement them.
 
 Voice clips are stored on a local directory shared with chatterbox via Docker volume. A virtual `default` voice is always present (maps to chatterbox's built-in reference clip).
 
@@ -73,8 +77,10 @@ curl http://localhost:3000/v1/audio/transcriptions \
 |----------|---------|-------------|
 | `GATEWAY_PORT` | `3000` | Host port for the gateway |
 | `HF_TOKEN` | — | HuggingFace API token |
-| `HF_HOME` | `~/.cache/huggingface` | Audio model weight cache |
-| `MODELS_DIR` | `./models` | LLM model cache |
+| `HF_HOME` | `~/.cache/huggingface` | Shared model weight cache (audio models + llama.cpp — llama-server now honours `HF_HOME` directly) |
+| `LLAMA_CACHE` | `${HF_HOME}` | Optional override for llama.cpp's native cache dir (falls back to `HF_HOME`) |
+| `LLAMA_MODELS_MAX` | `1` | Maximum llama.cpp presets loaded simultaneously |
+| `LLAMA_IDLE_TIMEOUT` | `-1` | Seconds of idleness before llama-server sleeps the current model (`-1` disables) |
 | `VOICES_DIR` | `./voices` | Voice reference clips (shared between gateway and chatterbox) |
 | `BACKEND_TIMEOUT` | `300` | Gateway timeout for provider requests (seconds) |
 

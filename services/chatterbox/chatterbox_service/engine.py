@@ -52,6 +52,10 @@ class ChatterboxEngine(IdleMixin):
     def __init__(self) -> None:
         self._models: dict[str, Any] = {}
         self._sample_rates: dict[str, int] = {}
+        # The most recently loaded model name (persists across unload
+        # so we can report ``sleeping`` against the specific model that
+        # was auto-unloaded by the idle checker).
+        self._last_loaded_name: str | None = None
 
     def load(self, model_name: str | None = None) -> None:
         model_name = model_name or settings.default_model
@@ -59,6 +63,8 @@ class ChatterboxEngine(IdleMixin):
 
         if model_name in self._models:
             logger.info("Model %s already loaded, skipping.", model_name)
+            self.mark_loaded()
+            self._last_loaded_name = model_name
             return
 
         if self._models:
@@ -66,22 +72,31 @@ class ChatterboxEngine(IdleMixin):
             self.unload()
 
         logger.info("Loading %s on device=%s ...", model_name, settings.device)
+        self._last_loaded_name = model_name
+        self.mark_loading()
         device = torch.device(settings.device)
 
-        if model_name == "chatterbox-turbo":
-            from chatterbox.tts_turbo import ChatterboxTurboTTS
-            model = ChatterboxTurboTTS.from_pretrained(device=device)
-        elif model_name == "chatterbox":
-            from chatterbox.tts import ChatterboxTTS
-            model = ChatterboxTTS.from_pretrained(device=device)
-        elif model_name == "chatterbox-multilingual":
-            from chatterbox.mtl_tts import ChatterboxMultilingualTTS
-            model = ChatterboxMultilingualTTS.from_pretrained(device=device)
-        else:
-            raise ValueError(f"Unknown model: {model_name}")
+        try:
+            if model_name == "chatterbox-turbo":
+                from chatterbox.tts_turbo import ChatterboxTurboTTS
+                model = ChatterboxTurboTTS.from_pretrained(device=device)
+            elif model_name == "chatterbox":
+                from chatterbox.tts import ChatterboxTTS
+                model = ChatterboxTTS.from_pretrained(device=device)
+            elif model_name == "chatterbox-multilingual":
+                from chatterbox.mtl_tts import ChatterboxMultilingualTTS
+                model = ChatterboxMultilingualTTS.from_pretrained(device=device)
+            else:
+                self.mark_unloaded()
+                self._last_loaded_name = None
+                raise ValueError(f"Unknown model: {model_name}")
+        except Exception:
+            self.mark_unloaded()
+            raise
 
         self._models[model_name] = model
         self._sample_rates[model_name] = model.sr
+        self.mark_loaded()
         self.touch()
         logger.info("Model %s loaded. Sample rate=%d", model_name, model.sr)
 
@@ -94,6 +109,10 @@ class ChatterboxEngine(IdleMixin):
                 logger.info("Model %s unloaded.", name)
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+        # Manual unload — transition to ``unloaded`` (not ``sleeping``).
+        # The idle checker uses ``mark_sleeping`` instead after calling this.
+        if not self._models:
+            self.mark_unloaded()
 
     def ensure_model(self, model_name: str) -> str:
         """Validate, resolve aliases, load if needed. Returns canonical name."""
@@ -113,6 +132,28 @@ class ChatterboxEngine(IdleMixin):
     @property
     def is_loaded(self) -> bool:
         return bool(self._models)
+
+    def status_for(self, model_name: str) -> str:
+        """Return the status phase for a specific model id.
+
+        The engine only keeps one model resident at a time. Status
+        resolution follows these rules:
+
+        - The model that is currently mid-load reports ``loading``.
+        - The currently-resident model reports ``loaded``.
+        - The most recently loaded model reports ``sleeping`` when the
+          engine was auto-unloaded by the idle checker.
+        - Every other model (and any model after a manual unload)
+          reports ``unloaded``.
+        """
+        phase = self.status_phase
+        if phase == "loading" and model_name == self._last_loaded_name:
+            return "loading"
+        if model_name in self._models:
+            return "loaded"
+        if phase == "sleeping" and model_name == self._last_loaded_name:
+            return "sleeping"
+        return "unloaded"
 
     def sample_rate(self, model_name: str) -> int:
         sr = self._sample_rates.get(model_name)

@@ -4,11 +4,32 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 # ---------------------------------------------------------------------------
 # Health & model listing
 # ---------------------------------------------------------------------------
+
+ModelStatusValue = Literal["unloaded", "loading", "loaded", "sleeping"]
+
+
+class ModelStatus(BaseModel):
+    """Lifecycle status of a model, mirroring llama-server's shape.
+
+    ``value`` is one of:
+
+    - ``unloaded`` — never loaded or explicitly unloaded
+    - ``loading``  — currently being loaded
+    - ``loaded``   — resident and ready to serve requests
+    - ``sleeping`` — auto-unloaded due to idle timeout; will reload lazily
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    value: ModelStatusValue = "unloaded"
+    args: list[str] = Field(default_factory=list)
+    failed: bool = False
+    exit_code: int | None = None
 
 
 class ModelObject(BaseModel):
@@ -17,12 +38,61 @@ class ModelObject(BaseModel):
     created: int = 0
     owned_by: str = ""
     capabilities: list[str] = Field(default_factory=list)  # gateway extension
-    loaded: bool = True  # gateway extension
+    status: ModelStatus | None = None  # gateway extension
+    loaded: bool = True  # gateway extension (derived from status when present)
+
+    @model_validator(mode="after")
+    def _sync_loaded_flag(self) -> ModelObject:
+        """Keep ``loaded`` consistent with ``status.value`` when both set."""
+        if self.status is not None:
+            self.loaded = self.status.value == "loaded"
+        return self
 
 
 class ModelListResponse(BaseModel):
     object: Literal["list"] = "list"
     data: list[ModelObject] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# Model management (gait extension — not in the OpenAI API)
+# ---------------------------------------------------------------------------
+
+
+class LoadModelRequest(BaseModel):
+    """Request body for ``POST /v1/models/load``."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    model: str = Field(..., description="Model id to load.")
+
+
+class LoadModelResponse(BaseModel):
+    """Response body for ``POST /v1/models/load``."""
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    success: bool
+    model: str
+    status: ModelStatus | None = None
+
+
+class UnloadModelRequest(BaseModel):
+    """Request body for ``POST /v1/models/unload``."""
+
+    model_config = ConfigDict(extra="forbid", protected_namespaces=())
+
+    model: str = Field(..., description="Model id to unload.")
+
+
+class UnloadModelResponse(BaseModel):
+    """Response body for ``POST /v1/models/unload``."""
+
+    model_config = ConfigDict(extra="allow", protected_namespaces=())
+
+    success: bool
+    model: str
+    status: ModelStatus | None = None
 
 
 class HealthResponse(BaseModel):

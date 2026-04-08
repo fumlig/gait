@@ -103,37 +103,24 @@ services:
       # The gateway still talks to the container internally over the docker network.
       - "${LLAMACPP_WEBUI_PORT:-8090}:8000"
     volumes:
-      - ${LLAMA_CACHE:-./models}:/root/.cache/llama.cpp
+      # llama.cpp's native cache. Falls back to HF_HOME when LLAMA_CACHE is
+      # unset — llama-server now honours HF_HOME for model lookups, so a
+      # single shared cache is fine.
+      - ${LLAMA_CACHE:-${HF_HOME:-${HOME}/.cache/huggingface}}:/root/.cache/llama.cpp
       - ${HF_HOME:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
+      # Preset file mounted read-only. Edit this to add/remove/retune models.
+      - ./config/llama-models.ini:/config/llama-models.ini:ro
     environment:
-      - LLAMA_ARG_MODEL=${LLAMA_MODEL:-}
-      # Default: Gemma 4 E4B (Q8_0). E2B/E4B are the only Gemma 4 variants with
-      # audio input support. mmproj is auto-downloaded from the same repo by -hf.
-      - LLAMA_ARG_HF_REPO=${LLAMA_HF_REPO:-unsloth/gemma-4-E4B-it-GGUF:Q8_0}
-      # Optional explicit overrides for the multimodal projector. Leave unset to
-      # let llama-server auto-detect from the HF repo above.
-      # - LLAMA_ARG_MMPROJ=${LLAMA_MMPROJ:-}
-      # - LLAMA_ARG_MMPROJ_URL=${LLAMA_MMPROJ_URL:-}
       - LLAMA_ARG_HOST=0.0.0.0
       - LLAMA_ARG_PORT=8000
-      - LLAMA_ARG_CTX_SIZE=${LLAMA_CTX_SIZE:-16384}
-      - LLAMA_ARG_N_GPU_LAYERS=${LLAMA_N_GPU_LAYERS:-32}
-      - LLAMA_ARG_N_PARALLEL=${LLAMA_N_PARALLEL:-1}
-      - LLAMA_ARG_FLASH_ATTN=${LLAMA_FLASH_ATTN:-on}
-      # Auto-fit graph reservation. Upstream default is `on`, but currently
-      # asserts on Gemma 4 (GGML_SCHED_MAX_SPLIT_INPUTS). Set LLAMA_FIT=off in
-      # .env when running Gemma 4.
-      - LLAMA_ARG_FIT=${LLAMA_FIT:-on}
-      - LLAMA_ARG_EMBEDDINGS=${LLAMA_EMBEDDINGS:-1}
-      - LLAMA_ARG_POOLING=${LLAMA_POOLING:-mean}
+      # Router mode: model-level tuning lives in the preset file, not env vars.
+      - LLAMA_ARG_MODELS_PRESET=/config/llama-models.ini
+      # Only ever keep one model resident at a time. Raise to load more
+      # presets simultaneously (at the cost of VRAM).
+      - LLAMA_ARG_MODELS_MAX=${LLAMA_MODELS_MAX:-1}
+      # Auto-unload idle models. -1 disables. Set LLAMA_IDLE_TIMEOUT to a
+      # positive number of seconds to free VRAM after inactivity.
       - LLAMA_ARG_SLEEP_IDLE_SECONDS=${LLAMA_IDLE_TIMEOUT:--1}
-      - LLAMA_ARG_JINJA=${LLAMA_JINJA:-true}
-      - LLAMA_ARG_REASONING_FORMAT=${LLAMA_REASONING_FORMAT:-deepseek}
-      - LLAMA_ARG_TEMP=${LLAMA_TEMP:-1.0}
-      - LLAMA_ARG_TOP_P=${LLAMA_TOP_P:-0.95}
-      # Gemma 4 recommends top_k=64 (Qwen used 20).
-      - LLAMA_ARG_TOP_K=${LLAMA_TOP_K:-64}
-      - LLAMA_ARG_MIN_P=${LLAMA_MIN_P:-0.0}
       - HF_TOKEN=${HF_TOKEN:-}
     deploy:
       resources:

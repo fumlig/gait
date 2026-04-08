@@ -12,7 +12,7 @@ import logging
 import os
 from typing import TYPE_CHECKING, ClassVar
 
-from gateway.models import ModelObject
+from gateway.models import ModelObject, ModelStatus
 
 if TYPE_CHECKING:
     from typing import Self
@@ -20,6 +20,23 @@ if TYPE_CHECKING:
     import httpx
 
 logger = logging.getLogger(__name__)
+
+
+def status_from_payload(raw: object) -> ModelStatus | None:
+    """Convert a service-side ``status`` dict into a ``ModelStatus``.
+
+    Accepts ``None`` or a dict; any other input (or a dict that fails
+    validation) yields ``None`` so callers can substitute their own
+    default. Shared helper used by every provider that forwards the
+    new per-model status field from its backend.
+    """
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return ModelStatus.model_validate(raw)
+    except Exception:
+        logger.debug("Ignoring malformed status payload: %r", raw)
+        return None
 
 
 class BaseProvider:
@@ -49,7 +66,13 @@ class BaseProvider:
         return self._base_url
 
     async def fetch_models(self) -> list[ModelObject]:
-        """Fetch models from the backend, injecting default capabilities."""
+        """Fetch models from the backend, injecting default capabilities.
+
+        If the backend reports a ``status`` object per model (as
+        chatterbox and whisperx now do, mirroring llama-server's
+        shape), it's propagated onto ``ModelObject.status`` and used
+        to derive the legacy ``loaded`` flag.
+        """
         url = f"{self._base_url}{self.models_path}"
         try:
             resp = await self._http_client.get(url, timeout=10.0)
@@ -62,12 +85,28 @@ class BaseProvider:
             data = resp.json()
             result: list[ModelObject] = []
             for m in data.get("data", []):
+                status_raw = m.get("status")
+                status: ModelStatus | None = None
+                if isinstance(status_raw, dict):
+                    try:
+                        status = ModelStatus.model_validate(status_raw)
+                    except Exception:
+                        logger.debug(
+                            "Ignoring malformed status for %s/%s",
+                            self.name, m.get("id", ""),
+                        )
+                        status = None
                 obj = ModelObject(
                     id=m.get("id", ""),
                     object=m.get("object", "model"),
                     created=m.get("created", 0),
-                    owned_by=m.get("owned_by", ""),
+                    # Always attribute models to this provider's name
+                    # so the gateway's load/unload routes can dispatch
+                    # by ``owned_by``. Service-side branding (e.g.
+                    # "resemble-ai") is intentionally not surfaced.
+                    owned_by=self.name,
                     capabilities=m.get("capabilities", []),
+                    status=status,
                     loaded=m.get("loaded", True),
                 )
                 if not obj.capabilities:

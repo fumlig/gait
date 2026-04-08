@@ -78,9 +78,21 @@ def mock_engine():
             "large-v3", "medium", "medium.en", "small", "small.en", "tiny",
             "tiny.en", "turbo",
         ]
-        eng.ensure_model.return_value = None
+        eng.ensure_model.return_value = "large-v3"
         eng.transcribe.return_value = MOCK_RESULT
         eng.touch.return_value = None
+        eng.unload.return_value = None
+        # Status state machine used by /models, /models/load,
+        # /models/unload and /health. Default: `large-v3` loaded, the
+        # alias `whisper-1` tracks it, everything else unloaded.
+        eng.status_phase = "loaded"
+
+        def _status_for(name: str) -> str:
+            if name in ("large-v3", "whisper-1"):
+                return "loaded"
+            return "unloaded"
+
+        eng.status_for.side_effect = _status_for
         # Also patch the engine used in app.py
         with patch("whisperx_service.app.engine", eng):
             yield eng
@@ -395,3 +407,149 @@ async def test_transcribe_stream_missing_model(client: AsyncClient):
         files={"file": ("test.wav", wav, "audio/wav")},
     )
     assert resp.status_code == 400
+
+
+# ===================================================================
+# /models status
+# ===================================================================
+
+
+async def test_list_models_includes_status(client: AsyncClient):
+    """Each /models entry includes a per-model lifecycle status object."""
+    resp = await client.get("/models")
+    data = resp.json()
+    by_id = {m["id"]: m for m in data["data"]}
+    assert by_id["large-v3"]["status"]["value"] == "loaded"
+    assert by_id["whisper-1"]["status"]["value"] == "loaded"
+    assert by_id["tiny"]["status"]["value"] == "unloaded"
+
+
+# ===================================================================
+# /models/load and /models/unload
+# ===================================================================
+
+
+async def test_load_model_success(client: AsyncClient, mock_engine: MagicMock):
+    """POST /models/load calls engine.ensure_model and returns status."""
+    mock_engine.ensure_model.return_value = "large-v3"
+    resp = await client.post(
+        "/models/load", json={"model": "large-v3"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["model"] == "large-v3"
+    assert "status" in data
+    mock_engine.ensure_model.assert_called_once_with("large-v3")
+
+
+async def test_load_model_engine_failure_returns_500(
+    client: AsyncClient, mock_engine: MagicMock,
+):
+    """Engine load failure returns 500."""
+    mock_engine.ensure_model.side_effect = RuntimeError("OOM")
+    resp = await client.post(
+        "/models/load", json={"model": "large-v3"},
+    )
+    assert resp.status_code == 500
+
+
+async def test_load_model_missing_field(client: AsyncClient):
+    """Missing ``model`` field returns 400."""
+    resp = await client.post("/models/load", json={})
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]
+    assert isinstance(detail, list)
+    assert any(e["type"] == "missing" for e in detail)
+
+
+async def test_load_model_extra_field_rejected(client: AsyncClient):
+    """extra='forbid' rejects unknown fields."""
+    resp = await client.post(
+        "/models/load", json={"model": "large-v3", "junk": 1},
+    )
+    assert resp.status_code == 400
+
+
+async def test_load_model_invalid_json(client: AsyncClient):
+    """Non-JSON body returns 400."""
+    resp = await client.post(
+        "/models/load",
+        content=b"not json",
+        headers={"content-type": "application/json"},
+    )
+    assert resp.status_code == 400
+
+
+async def test_unload_model_success(client: AsyncClient, mock_engine: MagicMock):
+    """POST /models/unload invokes engine.unload() (no arg)."""
+    resp = await client.post(
+        "/models/unload", json={"model": "large-v3"},
+    )
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["success"] is True
+    assert data["model"] == "large-v3"
+    # whisperx only holds one model at a time — it unloads all
+    # regardless of the requested id.
+    mock_engine.unload.assert_called_once_with()
+
+
+async def test_unload_model_engine_failure_returns_500(
+    client: AsyncClient, mock_engine: MagicMock,
+):
+    mock_engine.unload.side_effect = RuntimeError("boom")
+    resp = await client.post(
+        "/models/unload", json={"model": "large-v3"},
+    )
+    assert resp.status_code == 500
+
+
+# ===================================================================
+# Engine state machine (without real weights)
+# ===================================================================
+
+
+def test_engine_status_transitions():
+    """WhisperXEngine transitions unloaded→loaded→sleeping."""
+    from whisperx_service.engine import WhisperXEngine
+
+    engine = WhisperXEngine()
+    assert engine.status_phase == "unloaded"
+    assert engine.status_for("large-v3") == "unloaded"
+
+    # Fake a successful load.
+    engine._model = object()
+    engine._model_name = "large-v3"
+    engine._last_loaded_name = "large-v3"
+    engine.mark_loaded()
+    engine.touch()
+    assert engine.status_phase == "loaded"
+    assert engine.status_for("large-v3") == "loaded"
+    # ``whisper-1`` is an alias that tracks the currently loaded model.
+    assert engine.status_for("whisper-1") == "loaded"
+    # Other sizes stay unloaded.
+    assert engine.status_for("tiny") == "unloaded"
+
+    # Auto-unload via the idle checker transitions to sleeping.
+    engine._model = None
+    engine._model_name = None
+    engine.mark_sleeping()
+    assert engine.status_phase == "sleeping"
+    assert engine.status_for("large-v3") == "sleeping"
+    assert engine.status_for("tiny") == "unloaded"
+
+
+def test_engine_unload_marks_unloaded():
+    """Manual unload transitions to ``unloaded``, not ``sleeping``."""
+    from whisperx_service.engine import WhisperXEngine
+
+    engine = WhisperXEngine()
+    engine._model = object()
+    engine._model_name = "large-v3"
+    engine._last_loaded_name = "large-v3"
+    engine.mark_loaded()
+
+    engine.unload()
+    assert engine.status_phase == "unloaded"
+    assert engine.status_for("large-v3") == "unloaded"
