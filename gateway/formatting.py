@@ -1,5 +1,5 @@
 """STT response formatting (json, text, srt, vtt, verbose_json) and
-TTS/STT audio conversion (WAV ↔ PCM16, WAV → MP3).
+TTS audio conversion (WAV → MP3).
 """
 
 from __future__ import annotations
@@ -126,57 +126,6 @@ def _format_timestamp_vtt(seconds: float) -> str:
     s = int(seconds % 60)
     ms = int((seconds % 1) * 1000)
     return f"{h:02d}:{m:02d}:{s:02d}.{ms:03d}"
-
-
-def pcm16_to_wav(
-    pcm_bytes: bytes,
-    sample_rate: int = 24000,
-    channels: int = 1,
-    sample_width: int = 2,
-) -> bytes:
-    """Wrap raw PCM16 samples in a WAV container.
-
-    Inverse of :func:`wav_to_pcm16`.  Used to convert ``input_audio``
-    content parts (format ``pcm16``) into WAV before sending to the
-    STT backend.
-    """
-    import wave
-
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(channels)
-        wf.setsampwidth(sample_width)
-        wf.setframerate(sample_rate)
-        wf.writeframes(pcm_bytes)
-    return buf.getvalue()
-
-
-def wav_to_pcm16(wav_bytes: bytes, target_sr: int = 24000) -> tuple[bytes, int]:
-    """Convert WAV bytes to raw PCM16 mono at a target sample rate.
-
-    Returns (pcm_bytes, sample_rate). Falls back to pydub for non-standard
-    WAV formats (e.g. 32-bit float).
-    """
-    import wave
-
-    try:
-        buf = io.BytesIO(wav_bytes)
-        with wave.open(buf, "rb") as wf:
-            sr = wf.getframerate()
-            channels = wf.getnchannels()
-            sample_width = wf.getsampwidth()
-            frames = wf.readframes(wf.getnframes())
-
-        if sample_width == 2 and channels == 1 and sr == target_sr:
-            return frames, sr
-    except wave.Error:
-        pass
-
-    from pydub import AudioSegment
-
-    segment = AudioSegment.from_wav(io.BytesIO(wav_bytes))
-    segment = segment.set_channels(1).set_frame_rate(target_sr).set_sample_width(2)
-    return segment.raw_data, target_sr
 
 
 def wav_to_mp3(wav_bytes: bytes) -> bytes:

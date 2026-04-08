@@ -89,11 +89,24 @@ def models(raw_client: httpx.Client) -> dict[str, list[str]]:
     ids = [m["id"] for m in data]
     caps = {m["id"]: m.get("capabilities", []) for m in data}
 
+    def _has(cap_set: set[str], *wanted: str) -> bool:
+        return any(w in cap_set for w in wanted)
+
     return {
         "all": ids,
-        "tts": [i for i in ids if "speech" in caps.get(i, [])],
-        "stt": [i for i in ids if "transcription" in caps.get(i, [])],
-        "llm": [i for i in ids if "chat" in caps.get(i, [])],
+        "tts": [i for i in ids if _has(set(caps.get(i, [])), "speech")],
+        "stt": [i for i in ids if _has(set(caps.get(i, [])), "transcription")],
+        # llama-server reports "completion"; other chat backends might
+        # legitimately use "chat" — accept either.
+        "llm": [
+            i
+            for i in ids
+            if _has(set(caps.get(i, [])), "completion", "chat")
+        ],
+        # Models that can accept multimodal inputs (image_url, input_audio).
+        "multimodal": [
+            i for i in ids if _has(set(caps.get(i, [])), "multimodal")
+        ],
     }
 
 
@@ -986,26 +999,34 @@ class TestChatSamplingParams:
         assert resp.choices[0].finish_reason == "length"
 
     def test_frequency_penalty(self, client: OpenAI, models: dict):
+        """Gateway forwards ``frequency_penalty`` without erroring out."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         resp = client.chat.completions.create(
             model=models["llm"][0],
-            messages=[{"role": "user", "content": "Say something"}],
+            messages=[{"role": "user", "content": "Say hi"}],
             frequency_penalty=0.5,
             max_tokens=64,
         )
-        assert resp.choices[0].message.content
+        msg = resp.choices[0].message
+        # Either ``content`` or ``reasoning_content`` must be non-empty —
+        # reasoning models on a tight token budget may emit everything
+        # into the reasoning channel and leave ``content`` blank, which
+        # is still a successful round-trip through the gateway.
+        assert msg.content or msg.reasoning_content
 
     def test_presence_penalty(self, client: OpenAI, models: dict):
+        """Gateway forwards ``presence_penalty`` without erroring out."""
         if not models["llm"]:
             pytest.skip("No LLM model available")
         resp = client.chat.completions.create(
             model=models["llm"][0],
-            messages=[{"role": "user", "content": "Say something"}],
+            messages=[{"role": "user", "content": "Say hi"}],
             presence_penalty=0.5,
             max_tokens=64,
         )
-        assert resp.choices[0].message.content
+        msg = resp.choices[0].message
+        assert msg.content or msg.reasoning_content
 
     def test_logprobs(self, client: OpenAI, models: dict):
         """logprobs returns token-level log probabilities."""
@@ -1278,153 +1299,32 @@ class TestRoundTrip:
 
 
 # ===================================================================
-# Chat Audio  (gateway-specific: interleaves text+TTS in SSE stream)
+# (The former ``TestChatAudio`` class tested a gateway feature that
+# injected TTS audio chunks into chat-completion SSE streams to emulate
+# OpenAI's audio-output modality.  That feature was removed in commit
+# ``7e352f5`` — the gateway now forwards chat requests verbatim and
+# the ``modalities`` / ``audio`` fields reach whatever the backend
+# model does with them.  No gateway code left to test here.)
 # ===================================================================
 
 
-class TestChatAudio:
-    def test_chat_audio_stream(
-        self, models: dict, raw_client: httpx.Client,
-    ):
-        """Streaming with audio modality interleaves text and audio."""
-        if not models["llm"] or not models["tts"]:
-            pytest.skip("Need both LLM and TTS models")
-
-        r = raw_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": models["llm"][0],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": "Say hello in one sentence.",
-                    },
-                ],
-                "max_tokens": 512,
-                "stream": True,
-                "modalities": ["text", "audio"],
-                "audio": {
-                    "voice": "default",
-                    "model": models["tts"][0],
-                },
-            },
-            headers={"Accept": "text/event-stream"},
-        )
-        assert r.status_code == 200
-
-        raw_sse = r.text
-        _save("chat_audio_stream.txt", raw_sse)
-
-        text_tokens: list[str] = []
-        audio_data_chunks: list[str] = []
-        audio_transcripts: list[str] = []
-        got_audio_id = False
-        got_expires = False
-
-        for line in raw_sse.split("\n"):
-            line = line.strip()
-            if not line.startswith("data: "):
-                continue
-            payload = line[6:]
-            if payload == "[DONE]":
-                continue
-            try:
-                data = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            delta = data.get("choices", [{}])[0].get("delta", {})
-            if delta.get("content"):
-                text_tokens.append(delta["content"])
-            if delta.get("reasoning_content"):
-                text_tokens.append(delta["reasoning_content"])
-            if "audio" in delta:
-                audio = delta["audio"]
-                if "id" in audio:
-                    got_audio_id = True
-                if "data" in audio:
-                    audio_data_chunks.append(audio["data"])
-                if "transcript" in audio:
-                    audio_transcripts.append(audio["transcript"])
-                if "expires_at" in audio:
-                    got_expires = True
-
-        _save(
-            "chat_audio_parsed.json",
-            json.dumps(
-                {
-                    "text_token_count": len(text_tokens),
-                    "audio_chunk_count": len(audio_data_chunks),
-                    "audio_transcripts": audio_transcripts,
-                    "got_audio_id": got_audio_id,
-                    "got_expires": got_expires,
-                },
-                indent=2,
-            ),
-        )
-
-        assert len(text_tokens) > 0
-        assert got_audio_id
-        assert got_expires
-        assert len(audio_data_chunks) > 0
-        assert len(audio_transcripts) > 0
-
-    def test_chat_audio_nonstreaming(
-        self, models: dict, raw_client: httpx.Client,
-    ):
-        """Non-streaming audio modality returns message.audio."""
-        if not models["llm"] or not models["tts"]:
-            pytest.skip("Need both LLM and TTS models")
-
-        r = raw_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": models["llm"][0],
-                "messages": [
-                    {"role": "user", "content": "Say hello in one sentence."},
-                ],
-                "max_tokens": 512,
-                "modalities": ["text", "audio"],
-                "audio": {
-                    "voice": "default",
-                    "model": models["tts"][0],
-                    "format": "pcm16",
-                },
-            },
-        )
-        assert r.status_code == 200
-
-        data = r.json()
-        _save("chat_audio_nonstreaming.json", json.dumps(data, indent=2))
-
-        msg = data["choices"][0]["message"]
-        # Content is null per OpenAI contract when audio is returned
-        assert msg.get("content") is None
-        # Audio attachment present with all required fields
-        audio = msg["audio"]
-        assert "id" in audio
-        assert len(audio["id"]) > 0
-        assert "data" in audio
-        assert len(audio["data"]) > 0
-        assert "transcript" in audio
-        assert len(audio["transcript"]) > 0
-        assert "expires_at" in audio
-        assert audio["expires_at"] > 0
-
-        # Verify the audio data is valid base64
-        import base64
-        pcm_bytes = base64.b64decode(audio["data"])
-        assert len(pcm_bytes) > 0
-
-
 # ===================================================================
-# Chat Input Audio  (gateway transcribes input_audio → text before LLM)
+# Chat Input Audio  (gateway forwards input_audio straight to the
+#   chat backend; native multimodal models process it themselves)
 # ===================================================================
 
 
 class TestChatInputAudio:
+    """Exercise native ``input_audio`` support on a multimodal chat model.
+
+    The gateway does not transcribe or transform the audio — it just
+    passes the content part through.  Requires a chat model that
+    advertises ``multimodal`` in its capabilities.
+    """
+
     @pytest.fixture(scope="class")
     def tts_audio_wav(self, client: OpenAI, models: dict) -> bytes:
-        """Generate real speech via TTS for input_audio tests."""
+        """Generate a short real speech clip via TTS."""
         if not models["tts"]:
             pytest.skip("No TTS model available")
         tts_model = models["tts"][0]
@@ -1441,9 +1341,9 @@ class TestChatInputAudio:
     def test_input_audio_wav(
         self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
     ):
-        """input_audio with wav format is transcribed and answered by the LLM."""
-        if not models["llm"] or not models["stt"]:
-            pytest.skip("Need LLM and STT models")
+        """``input_audio`` (wav) is forwarded; a multimodal model answers."""
+        if not models["multimodal"]:
+            pytest.skip("No multimodal chat model available")
 
         import base64
         b64_audio = base64.b64encode(tts_audio_wav).decode()
@@ -1451,7 +1351,7 @@ class TestChatInputAudio:
         r = raw_client.post(
             "/v1/chat/completions",
             json={
-                "model": models["llm"][0],
+                "model": models["multimodal"][0],
                 "messages": [
                     {
                         "role": "user",
@@ -1462,6 +1362,14 @@ class TestChatInputAudio:
                                     "data": b64_audio,
                                     "format": "wav",
                                 },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Transcribe the preceding audio into "
+                                    "English text. Only output the "
+                                    "transcription, with no newlines."
+                                ),
                             },
                         ],
                     },
@@ -1475,58 +1383,16 @@ class TestChatInputAudio:
         _save("chat_input_audio_wav.json", json.dumps(data, indent=2))
 
         text = data["choices"][0]["message"]["content"] or ""
-        assert len(text) > 0, "LLM produced empty response from transcribed audio"
-
-    def test_input_audio_pcm16(
-        self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
-    ):
-        """input_audio with pcm16 format is converted to WAV then transcribed."""
-        if not models["llm"] or not models["stt"]:
-            pytest.skip("Need LLM and STT models")
-
-        import base64
-
-        from gateway.formatting import wav_to_pcm16
-
-        # Convert our WAV test audio to raw PCM16
-        pcm_bytes, _sr = wav_to_pcm16(tts_audio_wav, target_sr=16000)
-        b64_audio = base64.b64encode(pcm_bytes).decode()
-
-        r = raw_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": models["llm"][0],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": b64_audio,
-                                    "format": "pcm16",
-                                },
-                            },
-                        ],
-                    },
-                ],
-                "max_tokens": 256,
-            },
+        assert len(text) > 0, (
+            "Multimodal model produced empty response from input_audio"
         )
-        assert r.status_code == 200
-
-        data = r.json()
-        _save("chat_input_audio_pcm16.json", json.dumps(data, indent=2))
-
-        text = data["choices"][0]["message"]["content"] or ""
-        assert len(text) > 0, "LLM produced empty response from PCM16 audio"
 
     def test_input_audio_mixed_content(
         self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
     ):
-        """Text parts alongside input_audio are preserved."""
-        if not models["llm"] or not models["stt"]:
-            pytest.skip("Need LLM and STT models")
+        """Text and ``input_audio`` parts are both forwarded unchanged."""
+        if not models["multimodal"]:
+            pytest.skip("No multimodal chat model available")
 
         import base64
         b64_audio = base64.b64encode(tts_audio_wav).decode()
@@ -1534,21 +1400,23 @@ class TestChatInputAudio:
         r = raw_client.post(
             "/v1/chat/completions",
             json={
-                "model": models["llm"][0],
+                "model": models["multimodal"][0],
                 "messages": [
                     {
                         "role": "user",
                         "content": [
-                            {
-                                "type": "text",
-                                "text": "The user asked this audio question. Answer it:",
-                            },
                             {
                                 "type": "input_audio",
                                 "input_audio": {
                                     "data": b64_audio,
                                     "format": "wav",
                                 },
+                            },
+                            {
+                                "type": "text",
+                                "text": (
+                                    "Answer the question in the audio above."
+                                ),
                             },
                         ],
                     },
@@ -1563,152 +1431,6 @@ class TestChatInputAudio:
 
         text = data["choices"][0]["message"]["content"] or ""
         assert len(text) > 0
-
-    def test_input_audio_with_audio_output(
-        self, models: dict, raw_client: httpx.Client, tts_audio_wav: bytes,
-    ):
-        """input_audio preprocessing + audio output modality work together."""
-        if not models["llm"] or not models["tts"] or not models["stt"]:
-            pytest.skip("Need LLM, TTS, and STT models")
-
-        import base64
-        b64_audio = base64.b64encode(tts_audio_wav).decode()
-
-        r = raw_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": models["llm"][0],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": b64_audio,
-                                    "format": "wav",
-                                },
-                            },
-                        ],
-                    },
-                ],
-                "max_tokens": 256,
-                "stream": True,
-                "modalities": ["text", "audio"],
-                "audio": {
-                    "voice": "default",
-                    "model": models["tts"][0],
-                },
-            },
-            headers={"Accept": "text/event-stream"},
-        )
-        assert r.status_code == 200
-
-        raw_sse = r.text
-        _save("chat_input_audio_with_output.txt", raw_sse)
-
-        text_tokens: list[str] = []
-        audio_data_chunks: list[str] = []
-        got_audio_id = False
-
-        for line in raw_sse.split("\n"):
-            line = line.strip()
-            if not line.startswith("data: "):
-                continue
-            payload = line[6:]
-            if payload == "[DONE]":
-                continue
-            try:
-                data = json.loads(payload)
-            except json.JSONDecodeError:
-                continue
-            delta = data.get("choices", [{}])[0].get("delta", {})
-            if delta.get("content"):
-                text_tokens.append(delta["content"])
-            if delta.get("reasoning_content"):
-                text_tokens.append(delta["reasoning_content"])
-            if "audio" in delta:
-                a = delta["audio"]
-                if "id" in a:
-                    got_audio_id = True
-                if "data" in a:
-                    audio_data_chunks.append(a["data"])
-
-        _save(
-            "chat_input_audio_output_parsed.json",
-            json.dumps(
-                {
-                    "text_token_count": len(text_tokens),
-                    "audio_chunk_count": len(audio_data_chunks),
-                    "got_audio_id": got_audio_id,
-                },
-                indent=2,
-            ),
-        )
-
-        # LLM produced text from the transcribed input audio
-        assert len(text_tokens) > 0
-        # Audio output was also synthesised
-        assert got_audio_id
-        assert len(audio_data_chunks) > 0
-
-    def test_input_audio_empty_data(
-        self, models: dict, raw_client: httpx.Client,
-    ):
-        """input_audio with empty data returns 400."""
-        if not models["llm"]:
-            pytest.skip("No LLM model available")
-
-        r = raw_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": models["llm"][0],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": "",
-                                    "format": "wav",
-                                },
-                            },
-                        ],
-                    },
-                ],
-            },
-        )
-        assert r.status_code == 400
-
-    def test_input_audio_invalid_base64(
-        self, models: dict, raw_client: httpx.Client,
-    ):
-        """input_audio with invalid base64 returns 400."""
-        if not models["llm"]:
-            pytest.skip("No LLM model available")
-
-        r = raw_client.post(
-            "/v1/chat/completions",
-            json={
-                "model": models["llm"][0],
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {
-                                "type": "input_audio",
-                                "input_audio": {
-                                    "data": "!!!not-base64!!!",
-                                    "format": "wav",
-                                },
-                            },
-                        ],
-                    },
-                ],
-            },
-        )
-        assert r.status_code == 400
 
 
 # ===================================================================

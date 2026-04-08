@@ -175,6 +175,10 @@ class CreateResponseResponse(BaseModel):
     for a typical request:
 
     * ``created_at`` — current Unix timestamp (gateway receive time).
+    * ``model`` — empty string.  llama.cpp's ``response.created`` and
+      ``response.in_progress`` lifecycle SSE events nest a truncated
+      ``response`` object that omits ``model``; this default lets those
+      events validate instead of being silently dropped.
     * ``temperature`` / ``top_p`` — ``1.0`` (OpenAI sampling defaults).
     * ``tool_choice`` — ``"auto"`` (OpenAI default).
     * ``metadata`` — empty dict (OpenAI sends ``{}``).
@@ -186,7 +190,7 @@ class CreateResponseResponse(BaseModel):
     id: str
     object: Literal["response"] = "response"
     created_at: int = Field(default_factory=_now_ts)
-    model: str
+    model: str = ""
     output: list[dict[str, Any]] = Field(default_factory=list)
     status: str = "completed"
     # Token usage

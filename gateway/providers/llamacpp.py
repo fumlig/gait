@@ -24,6 +24,7 @@ from gateway.models import (
     CompletionResponse,
     CreateResponseResponse,
     EmbeddingResponse,
+    ModelObject,
 )
 from gateway.models.responses import ResponseStreamEvent
 from gateway.providers.base import BaseProvider
@@ -165,11 +166,63 @@ class LlamacppClient(BaseProvider, ChatCompletions, Completions, Responses, Embe
     name = "llamacpp"
     url_env = "LLAMACPP_URL"
     default_url = "http://llamacpp:8000"
-    default_model_capabilities: ClassVar[list[str]] = ["chat", "completions", "embeddings"]
+    # Empty fallback — we read capabilities directly from llama-server's
+    # native ``/v1/models`` response (see ``fetch_models``), so this list
+    # is only used if that response is missing/malformed.
+    default_model_capabilities: ClassVar[list[str]] = []
     models_path = "/v1/models"
 
     def _url(self, path: str) -> str:
         return f"{self._base_url}{path}"
+
+    # -- Model discovery ------------------------------------------------------
+
+    async def fetch_models(self) -> list[ModelObject]:
+        """Return models by reading llama-server's native ``models`` list.
+
+        llama-server's ``/v1/models`` response includes two parallel
+        lists: an OpenAI-shaped ``data`` array (missing capabilities)
+        and an Ollama-shaped ``models`` array that carries the real
+        per-model ``capabilities`` (e.g. ``["completion", "multimodal"]``).
+        We read the latter so that the gateway's ``/v1/models`` surfaces
+        what the backend actually reports, unchanged.
+        """
+        url = self._url(self.models_path)
+        try:
+            resp = await self._http_client.get(url, timeout=10.0)
+        except Exception:
+            logger.warning(
+                "llamacpp model discovery failed (%s) — may not be ready yet",
+                url, exc_info=True,
+            )
+            return []
+
+        if resp.status_code != 200:
+            logger.warning(
+                "llamacpp model discovery failed (%s): HTTP %d",
+                url, resp.status_code,
+            )
+            return []
+
+        payload = resp.json()
+        entries = payload.get("models") or []
+        result: list[ModelObject] = []
+        for entry in entries:
+            model_id = entry.get("model") or entry.get("name") or ""
+            if not model_id:
+                continue
+            capabilities = list(entry.get("capabilities") or [])
+            if not capabilities:
+                capabilities = list(self.default_model_capabilities)
+            result.append(
+                ModelObject(
+                    id=model_id,
+                    owned_by=self.name,
+                    capabilities=capabilities,
+                    loaded=True,
+                ),
+            )
+        return result
 
     # -- ChatCompletions ------------------------------------------------------
 

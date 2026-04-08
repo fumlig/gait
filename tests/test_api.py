@@ -55,7 +55,9 @@ LLAMACPP_MODELS = [
     ModelObject(
         id="my-model",
         owned_by="llamacpp",
-        capabilities=["chat", "completions", "embeddings"],
+        # Native llama-server shape (Ollama-style): "completion" +
+        # "multimodal" for a vision/audio-capable model.
+        capabilities=["completion", "multimodal"],
         loaded=True,
     ),
 ]
@@ -496,14 +498,16 @@ async def test_list_models_merged(client: AsyncClient):
 
 
 async def test_list_models_capabilities(client: AsyncClient):
-    """Gateway models include capabilities."""
+    """Gateway models include capabilities reported by each backend."""
     resp = await client.get("/v1/models")
     data = resp.json()
     by_id = {m["id"]: m for m in data["data"]}
     assert "speech" in by_id["chatterbox-turbo"]["capabilities"]
     assert "transcription" in by_id["whisper-1"]["capabilities"]
-    assert "chat" in by_id["my-model"]["capabilities"]
-    assert "embeddings" in by_id["my-model"]["capabilities"]
+    # llama-server reports "completion" (not "chat") and may add
+    # "multimodal" — the gateway forwards these unchanged.
+    assert "completion" in by_id["my-model"]["capabilities"]
+    assert "multimodal" in by_id["my-model"]["capabilities"]
 
 
 async def test_list_models_loaded_status(client: AsyncClient):
@@ -1629,7 +1633,12 @@ async def test_chat_completions_invalid_message_no_role(client: AsyncClient):
 
 
 # ===================================================================
-# Chat Completions — input_audio preprocessing
+# Chat Completions — multimodal content passthrough
+#
+# The gateway forwards the request body unchanged to the chat backend.
+# It does not interpret, transform, or preprocess multimodal content
+# parts (input_audio, image_url, …) — whether the backend model can
+# handle them is the backend's concern.
 # ===================================================================
 
 
@@ -1640,19 +1649,13 @@ def _b64_wav() -> str:
     return _b64.b64encode(_WAV_HEADER).decode()
 
 
-def _b64_pcm16() -> str:
-    """Return base64-encoded raw PCM16 samples (two bytes of silence)."""
-    import base64 as _b64
-
-    return _b64.b64encode(b"\x00\x00").decode()
-
-
-async def test_chat_input_audio_transcribed(
+async def test_chat_input_audio_forwarded_unchanged(
     client: AsyncClient,
     chat_client: AsyncMock,
     transcription_client: AsyncMock,
 ):
-    """input_audio content parts are transcribed and replaced with text."""
+    """``input_audio`` parts reach the chat backend exactly as sent."""
+    b64 = _b64_wav()
     resp = await client.post(
         "/v1/chat/completions",
         json={
@@ -1663,61 +1666,36 @@ async def test_chat_input_audio_transcribed(
                     "content": [
                         {
                             "type": "input_audio",
-                            "input_audio": {"data": _b64_wav(), "format": "wav"},
+                            "input_audio": {"data": b64, "format": "wav"},
                         }
                     ],
                 }
             ],
         },
     )
-
     assert resp.status_code == 200
-    transcription_client.transcribe.assert_called_once()
-    # The LLM should have received a text part instead of input_audio.
+
+    # STT must NOT have been touched — that was the old behaviour.
+    transcription_client.transcribe.assert_not_called()
+
+    # The chat backend must see the original input_audio part untouched.
     req = chat_client.chat_completions.call_args[0][0]
     content = req.messages[0].content
     assert isinstance(content, list)
-    assert content[0]["type"] == "text"
-    assert content[0]["text"] == "Hello world. This is a test."
+    assert len(content) == 1
+    assert content[0] == {
+        "type": "input_audio",
+        "input_audio": {"data": b64, "format": "wav"},
+    }
 
 
-async def test_chat_input_audio_pcm16_format(
+async def test_chat_mixed_content_forwarded_unchanged(
     client: AsyncClient,
     chat_client: AsyncMock,
     transcription_client: AsyncMock,
 ):
-    """input_audio with format=pcm16 is converted to WAV before STT."""
-    resp = await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "my-model",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": _b64_pcm16(), "format": "pcm16"},
-                        }
-                    ],
-                }
-            ],
-        },
-    )
-
-    assert resp.status_code == 200
-    transcription_client.transcribe.assert_called_once()
-    # Verify we sent WAV (starts with RIFF) not raw PCM.
-    call_kwargs = transcription_client.transcribe.call_args.kwargs
-    assert call_kwargs["file"][:4] == b"RIFF"
-
-
-async def test_chat_input_audio_mixed_content(
-    client: AsyncClient,
-    chat_client: AsyncMock,
-    transcription_client: AsyncMock,
-):
-    """Text parts are preserved alongside transcribed input_audio parts."""
+    """Text and ``input_audio`` parts coexist and are both passed through."""
+    b64 = _b64_wav()
     resp = await client.post(
         "/v1/chat/completions",
         json={
@@ -1729,138 +1707,62 @@ async def test_chat_input_audio_mixed_content(
                         {"type": "text", "text": "Listen to this:"},
                         {
                             "type": "input_audio",
-                            "input_audio": {"data": _b64_wav(), "format": "wav"},
+                            "input_audio": {"data": b64, "format": "wav"},
                         },
                     ],
                 }
             ],
         },
     )
+    assert resp.status_code == 200
+    transcription_client.transcribe.assert_not_called()
 
+    req = chat_client.chat_completions.call_args[0][0]
+    content = req.messages[0].content
+    assert isinstance(content, list)
+    assert content[0] == {"type": "text", "text": "Listen to this:"}
+    assert content[1] == {
+        "type": "input_audio",
+        "input_audio": {"data": b64, "format": "wav"},
+    }
+
+
+async def test_chat_image_url_forwarded_unchanged(
+    client: AsyncClient,
+    chat_client: AsyncMock,
+):
+    """``image_url`` content parts are also passed through untouched."""
+    resp = await client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "my-model",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,iVBORw0K"},
+                        }
+                    ],
+                }
+            ],
+        },
+    )
     assert resp.status_code == 200
     req = chat_client.chat_completions.call_args[0][0]
     content = req.messages[0].content
     assert isinstance(content, list)
-    assert len(content) == 2
-    assert content[0] == {"type": "text", "text": "Listen to this:"}
-    assert content[1]["type"] == "text"
-    assert content[1]["text"] == "Hello world. This is a test."
+    assert content[0]["type"] == "image_url"
+    assert content[0]["image_url"]["url"] == "data:image/png;base64,iVBORw0K"
 
 
-async def test_chat_input_audio_no_stt_backend(
-    client: AsyncClient,
-    chat_client: AsyncMock,
-):
-    """input_audio returns 503 when no transcription backend is configured."""
-    # Remove the transcription client
-    client._transport.app.state.audio_transcriptions = None  # type: ignore[union-attr]
-    resp = await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "my-model",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": _b64_wav(), "format": "wav"},
-                        }
-                    ],
-                }
-            ],
-        },
-    )
-    assert resp.status_code == 503
-
-
-async def test_chat_input_audio_transcription_failure(
+async def test_chat_string_content_forwarded_unchanged(
     client: AsyncClient,
     chat_client: AsyncMock,
     transcription_client: AsyncMock,
 ):
-    """input_audio returns 502 when the STT backend fails."""
-    transcription_client.transcribe.side_effect = ConnectionError("STT down")
-    resp = await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "my-model",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": _b64_wav(), "format": "wav"},
-                        }
-                    ],
-                }
-            ],
-        },
-    )
-    assert resp.status_code == 502
-
-
-async def test_chat_input_audio_empty_data(
-    client: AsyncClient,
-    chat_client: AsyncMock,
-    transcription_client: AsyncMock,
-):
-    """input_audio with empty data returns 400."""
-    resp = await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "my-model",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": "", "format": "wav"},
-                        }
-                    ],
-                }
-            ],
-        },
-    )
-    assert resp.status_code == 400
-    assert "empty" in resp.json()["detail"].lower()
-
-
-async def test_chat_input_audio_invalid_base64(
-    client: AsyncClient,
-    chat_client: AsyncMock,
-    transcription_client: AsyncMock,
-):
-    """input_audio with invalid base64 returns 400."""
-    resp = await client.post(
-        "/v1/chat/completions",
-        json={
-            "model": "my-model",
-            "messages": [
-                {
-                    "role": "user",
-                    "content": [
-                        {
-                            "type": "input_audio",
-                            "input_audio": {"data": "!!!not-base64!!!", "format": "wav"},
-                        }
-                    ],
-                }
-            ],
-        },
-    )
-    assert resp.status_code == 400
-    assert "base64" in resp.json()["detail"].lower()
-
-
-async def test_chat_input_audio_string_content_untouched(
-    client: AsyncClient,
-    chat_client: AsyncMock,
-    transcription_client: AsyncMock,
-):
-    """Messages with plain string content are not affected by preprocessing."""
+    """Plain-string ``content`` messages work unchanged."""
     resp = await client.post(
         "/v1/chat/completions",
         json={
@@ -1869,8 +1771,9 @@ async def test_chat_input_audio_string_content_untouched(
         },
     )
     assert resp.status_code == 200
-    # Transcription should NOT have been called
     transcription_client.transcribe.assert_not_called()
+    req = chat_client.chat_completions.call_args[0][0]
+    assert req.messages[0].content == "Hello"
 
 
 # ===================================================================
