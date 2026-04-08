@@ -46,7 +46,14 @@ async def _serialize_events(
 @router.post(
     "/v1/responses",
     response_model=CreateResponseResponse,
-    response_model_exclude_unset=True,
+    # NB: do *not* set ``response_model_exclude_unset=True``.  The models in
+    # ``gateway.models.responses`` deliberately declare every spec-required
+    # field with a sensible default so the gateway can fill in fields that
+    # the upstream provider (e.g. llama.cpp) omits.  ``exclude_unset`` would
+    # strip exactly those defaults from the serialized response and break
+    # strict OpenAI clients.  The streaming path already serializes via
+    # ``TypeAdapter.dump_json`` (which does not apply ``exclude_unset``);
+    # this keeps the non-streaming path consistent with that behavior.
 )
 async def create_response(
     body: CreateResponseRequest,

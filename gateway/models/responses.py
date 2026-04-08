@@ -1,9 +1,9 @@
 """Responses API: request, response, and streaming event models.
 
 Some upstream providers (notably llama.cpp) omit fields that the OpenAI
-specification marks as always-present in Responses API payloads.  Strict
-clients that validate against the spec fail when those fields are
-missing.
+specification marks as always-present in Responses API payloads, or emit
+them as an explicit ``null``.  Strict clients that validate against the
+spec fail in both cases.
 
 To work around this, every model in this module declares **all**
 spec-required fields with sensible defaults.  When an upstream response
@@ -11,6 +11,12 @@ is validated through these models (via ``model_validate`` or the
 ``ResponseStreamEvent`` discriminated union), any omitted fields are
 transparently filled in so the gateway's output always satisfies the
 OpenAI contract — regardless of how complete the backend's response is.
+
+For spec-required fields whose type is a nested struct (not
+``Optional``), we additionally attach a ``BeforeValidator`` that coerces
+an incoming ``None`` to an empty dict, so the field's ``default_factory``
+produces the default instance instead of raising a validation error.
+See ``_none_as_empty`` and its uses in ``ResponseUsage``.
 """
 
 from __future__ import annotations
@@ -18,7 +24,20 @@ from __future__ import annotations
 import time
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Discriminator, Field, Tag
+
+
+def _none_as_empty(v: Any) -> Any:
+    """Coerce an explicit ``None`` to ``{}`` for spec-required struct fields.
+
+    llama.cpp sometimes emits ``"output_tokens_details": null`` (and
+    similar) even though the OpenAI Responses API spec marks these
+    fields as always-present non-null structs.  Returning ``{}`` here
+    lets Pydantic fall through to the field's ``default_factory`` /
+    declared defaults, so the serialized gateway response always
+    contains a valid struct instead of ``null``.
+    """
+    return {} if v is None else v
 
 # ---------------------------------------------------------------------------
 # Request
@@ -127,15 +146,27 @@ class InputTokensDetails(BaseModel):
 
 
 class ResponseUsage(BaseModel):
-    """Token usage for the Responses API."""
+    """Token usage for the Responses API.
+
+    ``output_tokens_details`` and ``input_tokens_details`` are declared
+    as always-present non-null structs by the OpenAI spec.  We use
+    ``BeforeValidator(_none_as_empty)`` so that an explicit ``null``
+    from the upstream provider is coerced to the default instance
+    (``{"reasoning_tokens": 0}`` / ``{"cached_tokens": 0}``) rather
+    than propagated as ``null`` to strict clients.
+    """
 
     model_config = ConfigDict(extra="allow")
 
     input_tokens: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
-    output_tokens_details: OutputTokensDetails | None = None
-    input_tokens_details: InputTokensDetails | None = None
+    output_tokens_details: Annotated[
+        OutputTokensDetails, BeforeValidator(_none_as_empty),
+    ] = Field(default_factory=OutputTokensDetails)
+    input_tokens_details: Annotated[
+        InputTokensDetails, BeforeValidator(_none_as_empty),
+    ] = Field(default_factory=InputTokensDetails)
 
 
 class ResponseTextFormat(BaseModel):

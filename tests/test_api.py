@@ -2863,7 +2863,12 @@ async def test_responses_reasoning_not_sent_when_unset(
 async def test_responses_reasoning_usage_without_details(
     client: AsyncClient, chat_client: AsyncMock,
 ):
-    """Normal responses without reasoning return usage without token details."""
+    """Normal responses without reasoning still return a valid (default) token-details struct.
+
+    The OpenAI spec marks ``output_tokens_details`` / ``input_tokens_details``
+    as always-present non-null structs.  When the upstream provider omits
+    them (or sends ``null``), the gateway fills in the spec defaults.
+    """
     resp = await client.post(
         "/v1/responses",
         json={
@@ -2878,8 +2883,9 @@ async def test_responses_reasoning_usage_without_details(
     assert usage["input_tokens"] == 10
     assert usage["output_tokens"] == 8
     assert usage["total_tokens"] == 18
-    # Token details should not be present for non-reasoning responses
-    assert "output_tokens_details" not in usage or usage.get("output_tokens_details") is None
+    # Token details must always be a non-null struct with the spec defaults.
+    assert usage["output_tokens_details"] == {"reasoning_tokens": 0}
+    assert usage["input_tokens_details"] == {"cached_tokens": 0}
 
 
 async def test_responses_reasoning_streaming(
@@ -2952,6 +2958,97 @@ async def test_responses_reasoning_streaming(
     assert "Thinking about math..." in text
     assert "reasoning_tokens" in text
     assert "data: [DONE]" in text
+
+
+async def test_responses_usage_details_null_is_coerced(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """llama.cpp may emit ``"output_tokens_details": null`` — the gateway must
+    coerce it to the spec-default struct so strict clients don't fail
+    deserialization.
+
+    Regression test for the real-world failure:
+        ``failed to deserialize api response:
+          invalid type: null, expected struct OutputTokenDetails``
+    """
+    chat_client.create_response.return_value = CreateResponseResponse.model_validate({
+        "id": "resp-null-details-1",
+        "object": "response",
+        "created_at": 1700000000,
+        "model": "my-model",
+        "output": [
+            {
+                "type": "message",
+                "id": "msg_null_1",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "ok"}],
+            },
+        ],
+        "status": "completed",
+        "usage": {
+            "input_tokens": 157,
+            "output_tokens": 348,
+            "total_tokens": 505,
+            # llama.cpp literally sends this as null
+            "output_tokens_details": None,
+            "input_tokens_details": {"cached_tokens": 0},
+        },
+    })
+
+    resp = await client.post(
+        "/v1/responses",
+        json={"model": "my-model", "input": "hi"},
+    )
+    assert resp.status_code == 200
+    usage = resp.json()["usage"]
+    assert usage["output_tokens_details"] == {"reasoning_tokens": 0}
+    assert usage["input_tokens_details"] == {"cached_tokens": 0}
+
+
+async def test_responses_usage_details_null_in_stream_is_coerced(
+    client: AsyncClient, chat_client: AsyncMock,
+):
+    """Same coercion must apply to the streamed ``response.completed`` event."""
+    from gateway.models.responses import ResponseCompletedEvent
+
+    async def _gen():
+        yield ResponseCompletedEvent.model_validate({
+            "sequence_number": 45,
+            "response": {
+                "id": "resp-null-details-stream-1",
+                "object": "response",
+                "model": "my-model",
+                "output": [
+                    {
+                        "type": "message",
+                        "id": "msg_null_stream_1",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": "ok"}],
+                    },
+                ],
+                "status": "completed",
+                "usage": {
+                    "input_tokens": 157,
+                    "output_tokens": 348,
+                    "total_tokens": 505,
+                    "output_tokens_details": None,
+                    "input_tokens_details": {"cached_tokens": 0},
+                },
+            },
+        })
+
+    chat_client.create_response_stream = Mock(return_value=_gen())
+
+    resp = await client.post(
+        "/v1/responses",
+        json={"model": "my-model", "input": "hi", "stream": True},
+    )
+    assert resp.status_code == 200
+    body = resp.text
+    # Must contain the default struct, not a literal null.
+    assert '"output_tokens_details": null' not in body
+    assert '"output_tokens_details":null' not in body
+    assert '"reasoning_tokens"' in body
 
 
 async def test_responses_reasoning_with_tools(
