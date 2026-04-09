@@ -111,7 +111,7 @@ class ChatCompletionRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    model: str
+    model: str = Field(..., min_length=1)
     messages: list[ChatMessage]
     temperature: float | None = None
     top_p: float | None = None

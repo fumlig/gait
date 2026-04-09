@@ -58,7 +58,7 @@ class CreateResponseRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    model: str
+    model: str = Field(..., min_length=1)
     input: str | list[dict[str, Any]] = Field(
         ...,
         description="A text string or array of input items (messages, etc.).",

@@ -52,7 +52,7 @@ class SpeechRequest(BaseModel):
     Standard OpenAI fields plus Chatterbox-specific extensions.
     """
 
-    model: str
+    model: str = Field(..., min_length=1)
     input: str = Field(..., max_length=4096)
     voice: str
     response_format: SpeechResponseFormat = SpeechResponseFormat.mp3

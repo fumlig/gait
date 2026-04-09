@@ -21,7 +21,7 @@ class CompletionRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    model: str
+    model: str = Field(..., min_length=1)
     prompt: str | list[Any] = Field(
         ...,
         description=(

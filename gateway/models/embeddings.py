@@ -16,7 +16,7 @@ class EmbeddingRequest(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    model: str
+    model: str = Field(..., min_length=1)
     input: str | list[Any] = Field(
         ...,
         description=(

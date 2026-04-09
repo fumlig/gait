@@ -64,7 +64,7 @@ class LoadModelRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
-    model: str = Field(..., description="Model id to load.")
+    model: str = Field(..., min_length=1, description="Model id to load.")
 
 
 class LoadModelResponse(BaseModel):
@@ -82,7 +82,7 @@ class UnloadModelRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid", protected_namespaces=())
 
-    model: str = Field(..., description="Model id to unload.")
+    model: str = Field(..., min_length=1, description="Model id to unload.")
 
 
 class UnloadModelResponse(BaseModel):
