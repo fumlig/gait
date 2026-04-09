@@ -1,49 +1,40 @@
 # llamacpp
 
-Thin wrapper around the official [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) Docker image. No custom application code — runs the upstream `llama-server` binary directly, in **router mode**. The gateway proxies all requests transparently.
+Thin wrapper around the upstream [llama.cpp server](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) Docker image running in [router mode](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#using-multiple-models). No custom application code — `llama-server` handles the OpenAI protocol directly, and the gait gateway proxies requests transparently.
 
-Router mode lets API callers select a configuration per request by passing a preset name in the `model` field of the OpenAI API payload. llama-server spawns a child process for that preset on demand, keeps it warm, and auto-unloads it when idle. See [Using multiple models](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md#using-multiple-models) upstream for the full feature description.
+Part of [gait](../../README.md). Refer to the upstream llama.cpp server README for flags, API details and router-mode semantics.
 
-## Endpoints
+## What this service adds
 
-All provided by llama-server (already OpenAI-compatible):
+- A Dockerfile that builds llama.cpp with CUDA and runs it in router mode with a preset file.
+- A preset file convention (`config/llama-models.ini`) for declaring models and per-model CLI overrides.
+- A `LLAMACPP_WEBUI_PORT` mapping so llama-server's built-in chat UI is reachable from the host.
 
-| Method | Path | Description |
-|--------|------|-------------|
-| `POST` | `/v1/chat/completions` | Chat completions (streaming supported) |
-| `POST` | `/v1/completions` | Text completions (streaming supported) |
-| `POST` | `/v1/responses` | Responses API (streaming supported) |
-| `POST` | `/v1/embeddings` | Text embeddings |
-| `GET`  | `/v1/models` | Presets + cached models with per-model lifecycle `status` |
-| `POST` | `/models/load` | Load a preset (`{"model": "<id>"}`) — *note: no `/v1/` prefix* |
-| `POST` | `/models/unload` | Unload a preset (`{"model": "<id>"}`) — *note: no `/v1/` prefix* |
-| `GET`  | `/health` | Server health |
-
-The gait gateway wraps the two model-management endpoints and re-exposes them under `/v1/models/load` and `/v1/models/unload` (see the root README).
+The gait gateway wraps llama-server's `/models/load` and `/models/unload` endpoints and re-exposes them under `/v1/models/load` and `/v1/models/unload` (see the [root README](../../README.md#endpoints)).
 
 ## Configuration
 
-Since the move to router mode, model-level tuning lives in a **preset file** ([`config/llama-models.ini`](../../config/llama-models.ini) at the repo root) rather than in environment variables. Only infrastructure-level settings are still passed via env vars.
+Model-level tuning lives in the preset file, not env vars. Only infrastructure settings are passed through the environment:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `LLAMA_MODELS_MAX` | `1` | Maximum models loaded simultaneously. Bump to load more presets at once (costs VRAM). |
-| `LLAMA_IDLE_TIMEOUT` | `-1` | Seconds of idleness before llama-server puts the current model to sleep. `-1` disables. Applied to every child instance. |
-| `LLAMA_CACHE` | `${HF_HOME}` | llama.cpp's native cache dir. Falls back to `HF_HOME` when unset; llama-server now reads `HF_HOME` directly, so the shared mount is enough for most users. |
-| `HF_TOKEN` | -- | HuggingFace access token for gated repos (passed to every child). |
-| `LLAMACPP_WEBUI_PORT` | `8090` | Host port for the llama-server router web UI / raw API. |
+| `LLAMA_MODELS_MAX` | `1` | Max presets loaded simultaneously. |
+| `LLAMA_IDLE_TIMEOUT` | `-1` | Seconds of idleness before the active model sleeps. `-1` disables. |
+| `LLAMA_CACHE` | `${HF_HOME}` | Override for llama.cpp's native cache dir. Falls back to `HF_HOME`. |
+| `HF_TOKEN` | — | HuggingFace token for gated repos (passed to every child). |
+| `LLAMACPP_WEBUI_PORT` | `8090` | Host port for llama-server's built-in web UI / raw API. |
 
-Any other `LLAMA_ARG_*` variable listed in the [upstream docs](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) can still be set on the compose service — router-level args apply to every child instance.
+Any `LLAMA_ARG_*` variable from the [upstream docs](https://github.com/ggml-org/llama.cpp/blob/master/tools/server/README.md) can be set on the compose service — router-level args apply to every child instance.
 
-### Presets
+### Preset file
 
-Edit [`config/llama-models.ini`](../../config/llama-models.ini) to add, remove, or retune models. Each section maps to llama-server CLI arguments (without leading dashes):
+Edit [`config/llama-models.ini`](../../config/llama-models.ini) to add, remove or retune models. Each section maps to llama-server CLI arguments without the leading dashes:
 
 ```ini
 version = 1
 
 [*]
-; global defaults applied to every preset
+; defaults applied to every preset
 ctx-size = 16384
 n-gpu-layers = 99
 flash-attn = on
@@ -63,38 +54,30 @@ model = /root/.cache/huggingface/my-model-Q4_K_M.gguf
 ctx-size = 8192
 ```
 
-Precedence (highest wins):
-
-1. Command-line arguments passed to `llama-server`
-2. Model-specific section (e.g. `[unsloth/gemma-4-E4B-it-GGUF:Q8_0]`)
-3. Global `[*]` section
-
-Router-controlled args (`host`, `port`, `api-key`, `-hf`, `alias`) are stripped or overwritten when llama-server spawns a child.
+Precedence (highest wins): CLI args passed to `llama-server` → model-specific section → `[*]` section. Router-controlled args (`host`, `port`, `api-key`, `-hf`, `alias`) are stripped or overwritten when llama-server spawns a child.
 
 Two preset-only keys that are *not* CLI arguments:
 
 - `load-on-startup` (bool) — preload this preset on router start to avoid first-request latency.
-- `stop-timeout` (int, seconds) — grace period before a forced SIGKILL on unload (default 10).
-
-### Model sources
+- `stop-timeout` (int, seconds) — grace period before forced SIGKILL on unload (default 10).
 
 Presets resolve GGUF files in one of three ways:
 
-1. **HuggingFace cache** — the preset section name is a HF repo spec (e.g. `[unsloth/gemma-4-E4B-it-GGUF:Q8_0]`). Files are downloaded to `HF_HOME` on first load, and sibling `mmproj-*.gguf` files are auto-downloaded (controlled by `--mmproj-auto`, on by default) which is what enables vision/audio input for multimodal models like Gemma 4 E2B/E4B.
-2. **Local directory** — point `LLAMA_ARG_MODELS_DIR` at a directory of GGUF files (instead of the preset file, or in addition).
-3. **Custom path in preset** — any preset section that specifies `model = /path/to/file.gguf` loads from disk directly.
+1. **HuggingFace cache** — the section name is an HF repo spec (e.g. `[unsloth/gemma-4-E4B-it-GGUF:Q8_0]`). Files are downloaded to `HF_HOME` on first load. Sibling `mmproj-*.gguf` files are auto-downloaded (`--mmproj-auto`, on by default), enabling vision/audio input for multimodal models like Gemma 4 E2B/E4B.
+2. **Local directory** — point `LLAMA_ARG_MODELS_DIR` at a directory of GGUF files.
+3. **Explicit path** — a `model = /path/to/file.gguf` line in the preset section.
 
 ## Native web UI
 
-`llama-server` ships with a built-in chat web UI at `/`, served on the same port as the OpenAI API. The compose file publishes the container's port 8000 to the host on `${LLAMACPP_WEBUI_PORT:-8080}`, so once the stack is up you can open:
+`llama-server` serves its chat UI at `/` on the same port as the OpenAI API. The compose file publishes it on `${LLAMACPP_WEBUI_PORT:-8090}`:
 
-- Web UI: `http://localhost:8080/`
-- Raw OpenAI API: `http://localhost:8080/v1/...`
+- Web UI: http://localhost:8090/
+- Raw OpenAI API: http://localhost:8090/v1/...
 
-The gait gateway (port 3000) still proxies the same backend over the docker-internal network — exposing the host port is purely for direct access to the upstream UI (e.g. to test image/audio input that the gait gateway doesn't yet route through).
+The gateway still proxies the same backend over the Docker network; exposing the host port is only useful for direct access to the upstream UI.
 
 ## Gemma 4 notes
 
 - Only the **E2B** and **E4B** variants support audio input (max 30 s clips). The 26B-A4B and 31B variants are vision-only.
-- The default config pulls **`unsloth/gemma-4-E4B-it-GGUF:Q8_0`**, which fits in ~8 GB and is the unsloth-recommended quant for the small variants.
-- Thinking mode is template-controlled via `--chat-template-kwargs`. To toggle it explicitly, set the env var `LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'` on the `llamacpp` service (note: this one does **not** use the `LLAMA_ARG_` prefix).
+- The default preset pulls `unsloth/gemma-4-E4B-it-GGUF:Q8_0`, which fits in ~8 GB.
+- Thinking mode is template-controlled via `--chat-template-kwargs`. To toggle it explicitly, set `LLAMA_CHAT_TEMPLATE_KWARGS='{"enable_thinking":false}'` on the `llamacpp` service (note: no `LLAMA_ARG_` prefix).
