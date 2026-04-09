@@ -114,7 +114,8 @@ def _invalidate_models_cache(app: FastAPI) -> None:
 
 
 async def _find_manager_for_model(
-    app: FastAPI, model_id: str,
+    app: FastAPI,
+    model_id: str,
 ) -> ModelManagement:
     """Look up the provider that owns ``model_id`` and return it as a manager.
 
@@ -141,10 +142,7 @@ async def _find_manager_for_model(
         if not isinstance(provider, ModelManagement):
             raise HTTPException(
                 status_code=400,
-                detail=(
-                    f"Provider '{owner}' does not support model "
-                    f"management (load/unload)."
-                ),
+                detail=(f"Provider '{owner}' does not support model management (load/unload)."),
             )
         return provider
 
