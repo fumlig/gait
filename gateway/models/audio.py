@@ -166,6 +166,16 @@ class TranscriptionTextDeltaEvent(BaseModel):
     segment_id: str | None = None
 
 
+class TranscriptionTextDoneUsage(BaseModel):
+    """Usage statistics included in the ``transcript.text.done`` event."""
+
+    type: Literal["tokens"] = "tokens"
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    input_token_details: dict | None = None
+
+
 class TranscriptionTextDoneEvent(BaseModel):
     """``transcript.text.done`` — accumulated full transcript text."""
 
@@ -174,6 +184,7 @@ class TranscriptionTextDoneEvent(BaseModel):
     type: Literal["transcript.text.done"] = "transcript.text.done"
     text: str = ""
     logprobs: list[TranscriptionLogprob] = Field(default_factory=list)
+    usage: TranscriptionTextDoneUsage = Field(default_factory=TranscriptionTextDoneUsage)
 
 
 def _get_transcription_event_discriminator(v: Any) -> str:
