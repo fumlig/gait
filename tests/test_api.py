@@ -203,19 +203,15 @@ def _make_speech_client(
 async def _mock_transcribe_stream(**kwargs):
     """Default async generator for transcribe_stream mocking."""
     from gateway.models.audio import (
-        TranscriptionCompletedEvent,
-        TranscriptionCreatedEvent,
         TranscriptionTextDeltaEvent,
         TranscriptionTextDoneEvent,
     )
 
-    yield TranscriptionCreatedEvent()
     parts: list[str] = []
     for seg in MOCK_TRANSCRIPTION_RESULT.segments:
         parts.append(seg.text)
         yield TranscriptionTextDeltaEvent(delta=seg.text)
     yield TranscriptionTextDoneEvent(text=" ".join(parts))
-    yield TranscriptionCompletedEvent()
 
 
 def _make_transcription_client(
@@ -952,16 +948,14 @@ async def test_transcription_stream(client: AsyncClient, transcription_client: A
         if event_type and data:
             events.append((event_type, data))
 
-    # created + two deltas + done + completed
-    assert len(events) == 5
-    assert events[0][0] == "transcription.created"
-    assert events[1][0] == "transcription.text.delta"
-    assert events[1][1]["delta"] == "Hello world."
-    assert events[2][0] == "transcription.text.delta"
-    assert events[2][1]["delta"] == "This is a test."
-    assert events[3][0] == "transcription.text.done"
-    assert events[3][1]["text"] == "Hello world. This is a test."
-    assert events[4][0] == "transcription.completed"
+    # two deltas + done
+    assert len(events) == 3
+    assert events[0][0] == "transcript.text.delta"
+    assert events[0][1]["delta"] == "Hello world."
+    assert events[1][0] == "transcript.text.delta"
+    assert events[1][1]["delta"] == "This is a test."
+    assert events[2][0] == "transcript.text.done"
+    assert events[2][1]["text"] == "Hello world. This is a test."
 
 
 async def test_transcription_stream_uses_stream_endpoint(

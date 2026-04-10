@@ -16,8 +16,6 @@ from gateway.models import (
     WordTimestamp,
 )
 from gateway.models.audio import (
-    TranscriptionCompletedEvent,
-    TranscriptionCreatedEvent,
     TranscriptionStreamEvent,
     TranscriptionTextDeltaEvent,
     TranscriptionTextDoneEvent,
@@ -191,8 +189,6 @@ class WhisperxClient(
             detail = resp.text or f"Backend returned HTTP {resp.status_code}"
             raise HTTPException(status_code=resp.status_code, detail=detail)
 
-        yield TranscriptionCreatedEvent()
-
         parts: list[str] = []
         try:
             async for line in resp.aiter_lines():
@@ -207,7 +203,6 @@ class WhisperxClient(
             await resp.aclose()
 
         yield TranscriptionTextDoneEvent(text=" ".join(parts))
-        yield TranscriptionCompletedEvent()
 
     @staticmethod
     def _parse_result(raw: dict) -> TranscriptionResult:

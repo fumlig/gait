@@ -155,40 +155,25 @@ class TranscriptionLogprob(BaseModel):
     bytes: list[int] | None = None
 
 
-class TranscriptionCreatedEvent(BaseModel):
-    """``transcription.created`` — initial lifecycle event."""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: Literal["transcription.created"] = "transcription.created"
-
-
 class TranscriptionTextDeltaEvent(BaseModel):
-    """``transcription.text.delta`` — incremental transcript text."""
+    """``transcript.text.delta`` — incremental transcript text."""
 
     model_config = ConfigDict(extra="allow")
 
-    type: Literal["transcription.text.delta"] = "transcription.text.delta"
+    type: Literal["transcript.text.delta"] = "transcript.text.delta"
     delta: str = ""
     logprobs: list[TranscriptionLogprob] = Field(default_factory=list)
+    segment_id: str | None = None
 
 
 class TranscriptionTextDoneEvent(BaseModel):
-    """``transcription.text.done`` — accumulated full transcript text."""
+    """``transcript.text.done`` — accumulated full transcript text."""
 
     model_config = ConfigDict(extra="allow")
 
-    type: Literal["transcription.text.done"] = "transcription.text.done"
+    type: Literal["transcript.text.done"] = "transcript.text.done"
     text: str = ""
     logprobs: list[TranscriptionLogprob] = Field(default_factory=list)
-
-
-class TranscriptionCompletedEvent(BaseModel):
-    """``transcription.completed`` — final lifecycle event."""
-
-    model_config = ConfigDict(extra="allow")
-
-    type: Literal["transcription.completed"] = "transcription.completed"
 
 
 def _get_transcription_event_discriminator(v: Any) -> str:
@@ -199,10 +184,8 @@ def _get_transcription_event_discriminator(v: Any) -> str:
 
 
 TranscriptionStreamEvent = Annotated[
-    Annotated[TranscriptionCreatedEvent, Tag("transcription.created")]
-    | Annotated[TranscriptionTextDeltaEvent, Tag("transcription.text.delta")]
-    | Annotated[TranscriptionTextDoneEvent, Tag("transcription.text.done")]
-    | Annotated[TranscriptionCompletedEvent, Tag("transcription.completed")],
+    Annotated[TranscriptionTextDeltaEvent, Tag("transcript.text.delta")]
+    | Annotated[TranscriptionTextDoneEvent, Tag("transcript.text.done")],
     Discriminator(_get_transcription_event_discriminator),
 ]
 """Discriminated union of audio transcription streaming event types."""
