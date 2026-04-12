@@ -29,7 +29,10 @@ if TYPE_CHECKING:
         UnloadModelResponse,
         Voice,
     )
-    from gateway.models.audio import TranscriptionStreamEvent
+    from gateway.models.audio import (
+        SpeechResponseFormat,
+        TranscriptionStreamEvent,
+    )
     from gateway.models.responses import ResponseStreamEvent
 
 
@@ -75,6 +78,16 @@ class Embeddings(Protocol):
 
 @runtime_checkable
 class AudioSpeech(Protocol):
+    @property
+    def native_audio_format(self) -> SpeechResponseFormat:
+        """The audio format the backend produces natively."""
+        ...
+
+    @property
+    def supports_instructions(self) -> bool:
+        """Whether the backend supports the ``instructions`` field."""
+        ...
+
     async def synthesize(self, request: SpeechRequest) -> tuple[bytes, str]: ...
     async def synthesize_stream(self, request: SpeechRequest) -> StreamingResponse: ...
 

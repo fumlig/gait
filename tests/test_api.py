@@ -19,6 +19,7 @@ from gateway.models import (
     ModelObject,
     ModelStatus,
     RawSegment,
+    SpeechResponseFormat,
     TranscriptionResult,
     UnloadModelResponse,
     WordTimestamp,
@@ -186,6 +187,8 @@ def _make_speech_client(
     client = AsyncMock()
     client.name = "chatterbox"
     client.base_url = "http://chatterbox:8000"
+    client.native_audio_format = SpeechResponseFormat.wav
+    client.supports_instructions = False
     client.check_health.return_value = {"status": "healthy"}
     client.fetch_models.return_value = CHATTERBOX_MODELS
     _install_model_management_mocks(client, "chatterbox")
@@ -788,8 +791,8 @@ async def test_speech_validation_error(client: AsyncClient):
     assert resp.status_code == 422
 
 
-async def test_speech_unsupported_format(client: AsyncClient, speech_client: AsyncMock):
-    """Gateway returns 400 for unsupported audio formats."""
+async def test_speech_opus_format(client: AsyncClient, speech_client: AsyncMock):
+    """Gateway converts WAV to Opus when requested."""
     resp = await client.post(
         "/v1/audio/speech",
         json={
@@ -799,8 +802,244 @@ async def test_speech_unsupported_format(client: AsyncClient, speech_client: Asy
             "response_format": "opus",
         },
     )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/opus"
+    # Opus is in an OGG container — starts with "OggS".
+    assert resp.content[:4] == b"OggS"
+    # Buffered path.
+    speech_client.synthesize.assert_called_once()
+
+
+async def test_speech_flac_format(client: AsyncClient, speech_client: AsyncMock):
+    """Gateway converts WAV to FLAC when requested."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "flac",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/flac"
+    assert resp.content[:4] == b"fLaC"
+
+
+async def test_speech_aac_format(client: AsyncClient, speech_client: AsyncMock):
+    """Gateway converts WAV to AAC (ADTS) when requested."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "aac",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/aac"
+
+
+async def test_speech_pcm_format(client: AsyncClient, speech_client: AsyncMock):
+    """Gateway converts WAV to raw PCM when requested (buffered path)."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "pcm",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/pcm"
+    # PCM should not start with RIFF header.
+    assert resp.content[:4] != b"RIFF"
+
+
+async def test_speech_sse_wav(client: AsyncClient, speech_client: AsyncMock):
+    """SSE streaming returns text/event-stream with base64-encoded WAV chunks."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello world",
+            "voice": "default",
+            "response_format": "wav",
+            "stream_format": "sse",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+
+    # SSE always uses synthesize (full buffer), not synthesize_stream.
+    speech_client.synthesize.assert_called_once()
+    speech_client.synthesize_stream.assert_not_called()
+
+    # Parse the SSE body: collect event/data pairs.
+    import json as _json
+    lines = resp.text.strip().split("\n")
+    data_lines = [line for line in lines if line.startswith("data: ")]
+    event_lines = [line for line in lines if line.startswith("event: ")]
+
+    # At least one delta event + done event + [DONE] sentinel.
+    assert len(data_lines) >= 3
+
+    # First SSE event should have event: speech.audio.delta header.
+    assert event_lines[0] == "event: speech.audio.delta"
+    first = _json.loads(data_lines[0].removeprefix("data: "))
+    assert first["type"] == "speech.audio.delta"
+    assert "audio" in first
+
+    # Decode the base64 audio to verify it's valid WAV.
+    import base64
+    decoded = base64.b64decode(first["audio"])
+    assert decoded[:4] == b"RIFF"  # WAV header
+
+    # Second-to-last data line should be speech.audio.done with event header.
+    assert event_lines[-1] == "event: speech.audio.done"
+    done = _json.loads(data_lines[-2].removeprefix("data: "))
+    assert done["type"] == "speech.audio.done"
+    assert "usage" in done
+    assert done["usage"]["input_tokens"] == 2  # "Hello world" = 2 words
+
+    # Last data line is the [DONE] sentinel (no event: header).
+    assert data_lines[-1] == "data: [DONE]"
+
+
+async def test_speech_sse_mp3(client: AsyncClient, speech_client: AsyncMock):
+    """SSE streaming with mp3 format returns base64-encoded MP3 chunks."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "mp3",
+            "stream_format": "sse",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    speech_client.synthesize.assert_called_once()
+
+    # Verify correct SSE event types are present.
+    lines = resp.text.strip().split("\n")
+    event_lines = [line for line in lines if line.startswith("event: ")]
+    assert "event: speech.audio.delta" in event_lines
+    assert "event: speech.audio.done" in event_lines
+
+
+async def test_speech_sse_all_formats(client: AsyncClient, speech_client: AsyncMock):
+    """SSE streaming works for all supported response formats."""
+    for fmt in ("wav", "mp3", "opus", "flac", "aac", "pcm"):
+        speech_client.synthesize.reset_mock()
+        resp = await client.post(
+            "/v1/audio/speech",
+            json={
+                "model": "chatterbox-turbo",
+                "input": "Hello",
+                "voice": "default",
+                "response_format": fmt,
+                "stream_format": "sse",
+            },
+        )
+        assert resp.status_code == 200, f"Failed for format {fmt}"
+        assert resp.headers["content-type"].startswith("text/event-stream")
+        speech_client.synthesize.assert_called_once()
+
+
+async def test_speech_sse_response_id(client: AsyncClient, speech_client: AsyncMock):
+    """SSE events include a consistent response_id."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "wav",
+            "stream_format": "sse",
+        },
+    )
+    assert resp.status_code == 200
+    lines = resp.text.strip().split("\n")
+    data_lines = [line for line in lines if line.startswith("data: ") and line != "data: [DONE]"]
+    ids = set()
+    for line in data_lines:
+        event = json.loads(line.removeprefix("data: "))
+        assert "response_id" in event
+        assert event["response_id"].startswith("resp_")
+        ids.add(event["response_id"])
+    # All events share the same response_id.
+    assert len(ids) == 1
+
+
+async def test_speech_pcm_streaming(client: AsyncClient, speech_client: AsyncMock):
+    """PCM format uses the streaming path (strips WAV headers)."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "pcm",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "audio/pcm"
+    # PCM uses the streaming path, not the buffered path.
+    speech_client.synthesize_stream.assert_called_once()
+    speech_client.synthesize.assert_not_called()
+
+
+async def test_speech_instructions_rejected(client: AsyncClient, speech_client: AsyncMock):
+    """Instructions field is rejected when provider doesn't support it."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "instructions": "Speak in a cheerful tone",
+        },
+    )
     assert resp.status_code == 400
-    assert "not currently supported" in resp.json()["detail"]
+    assert "instructions" in resp.json()["detail"].lower()
+
+
+async def test_speech_instructions_accepted_when_supported(
+    client: AsyncClient, speech_client: AsyncMock,
+):
+    """Instructions field is passed through when provider supports it."""
+    speech_client.supports_instructions = True
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "instructions": "Speak in a cheerful tone",
+            "response_format": "wav",
+        },
+    )
+    assert resp.status_code == 200
+
+
+async def test_speech_no_instructions_always_accepted(
+    client: AsyncClient, speech_client: AsyncMock,
+):
+    """Omitting instructions works regardless of provider support."""
+    resp = await client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "chatterbox-turbo",
+            "input": "Hello",
+            "voice": "default",
+            "response_format": "wav",
+        },
+    )
+    assert resp.status_code == 200
 
 
 # ===================================================================

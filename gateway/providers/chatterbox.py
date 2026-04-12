@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, ClassVar
 from fastapi import HTTPException
 from starlette.responses import StreamingResponse
 
-from gateway.models import LoadModelResponse, UnloadModelResponse
+from gateway.models import LoadModelResponse, SpeechResponseFormat, UnloadModelResponse
 from gateway.providers.base import BaseProvider, status_from_payload
 from gateway.providers.protocols import AudioSpeech, ModelManagement
 
@@ -23,6 +23,14 @@ class ChatterboxClient(BaseProvider, AudioSpeech, ModelManagement):
     url_env = "CHATTERBOX_URL"
     default_url = "http://chatterbox:8000"
     default_model_capabilities: ClassVar[list[str]] = ["speech"]
+
+    @property
+    def native_audio_format(self) -> SpeechResponseFormat:
+        return SpeechResponseFormat.wav
+
+    @property
+    def supports_instructions(self) -> bool:
+        return False
 
     # -- ModelManagement ------------------------------------------------------
 
@@ -55,7 +63,9 @@ class ChatterboxClient(BaseProvider, AudioSpeech, ModelManagement):
         """Build the backend JSON payload from an OpenAI SpeechRequest."""
         payload = request.model_dump(exclude_none=True)
         payload["text"] = payload.pop("input")
-        payload.pop("response_format", None)  # backend always returns WAV
+        payload.pop("response_format", None)  # gateway handles format conversion
+        payload.pop("stream_format", None)  # gateway-only field
+        payload.pop("instructions", None)  # not supported by this backend
         return payload
 
     async def synthesize(self, request: SpeechRequest) -> tuple[bytes, str]:

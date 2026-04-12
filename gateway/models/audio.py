@@ -28,6 +28,10 @@ class SpeechResponseFormat(StrEnum):
     pcm = "pcm"
 
 
+class SpeechStreamFormat(StrEnum):
+    sse = "sse"
+
+
 class TranscriptionResponseFormat(StrEnum):
     json = "json"
     text = "text"
@@ -55,8 +59,10 @@ class SpeechRequest(BaseModel):
     model: str = Field(..., min_length=1)
     input: str = Field(..., max_length=4096)
     voice: str
+    instructions: str | None = None
     response_format: SpeechResponseFormat = SpeechResponseFormat.mp3
     speed: float = Field(default=1.0, ge=0.25, le=4.0)
+    stream_format: SpeechStreamFormat | None = None
 
     # Chatterbox extensions (not part of OpenAI API)
     language: str | None = None
@@ -68,6 +74,50 @@ class SpeechRequest(BaseModel):
     min_p: float | None = Field(default=None, ge=0.0, le=1.0)
     top_k: int | None = Field(default=None, ge=1)
     seed: int | None = None
+
+
+# ---------------------------------------------------------------------------
+# Speech SSE streaming events
+# ---------------------------------------------------------------------------
+
+
+class SpeechAudioUsage(BaseModel):
+    """Token usage included in the speech.audio.done event."""
+
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+
+
+class SpeechAudioDeltaEvent(BaseModel):
+    """``speech.audio.delta`` — one base64 audio chunk."""
+
+    type: Literal["speech.audio.delta"] = "speech.audio.delta"
+    response_id: str = ""
+    audio: str  # base64-encoded audio bytes
+
+
+class SpeechAudioDoneEvent(BaseModel):
+    """``speech.audio.done`` — final event with usage stats."""
+
+    type: Literal["speech.audio.done"] = "speech.audio.done"
+    response_id: str = ""
+    usage: SpeechAudioUsage = Field(default_factory=SpeechAudioUsage)
+
+
+def _get_speech_event_discriminator(v: Any) -> str:
+    """Extract the ``type`` tag for discriminated-union dispatch."""
+    if isinstance(v, dict):
+        return v.get("type", "")
+    return getattr(v, "type", "")
+
+
+SpeechStreamEvent = Annotated[
+    Annotated[SpeechAudioDeltaEvent, Tag("speech.audio.delta")]
+    | Annotated[SpeechAudioDoneEvent, Tag("speech.audio.done")],
+    Discriminator(_get_speech_event_discriminator),
+]
+"""Discriminated union of audio speech streaming event types."""
 
 
 # ---------------------------------------------------------------------------
